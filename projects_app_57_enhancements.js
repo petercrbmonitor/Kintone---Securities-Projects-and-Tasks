@@ -1,0 +1,523 @@
+/**
+ * CRB Monitor - Projects/Tasks App (App 57) Enhancements
+ * 
+ * Adds visual enhancements, status tracking, and notifications
+ * for the task management system.
+ * 
+ * Installation:
+ * 1. Go to App 57 Settings → Customization and Integration → JavaScript and CSS
+ * 2. Upload this file
+ * 3. Save and Update App
+ */
+
+(function() {
+  'use strict';
+
+  // ============================================================
+  // CONFIGURATION
+  // ============================================================
+  
+  const CONFIG = {
+    DARB_APP_ID: 23,
+    
+    // Field codes in App 57 - matched to your actual field codes
+    FIELDS: {
+      TASK_NAME: 'Project_Name',
+      TASK_TYPE: 'Project_Field',
+      ASSIGNEE: 'Task_Assignee',       // Assignee field
+      STATUS: 'status',               // lowercase
+      DUE_DATE: 'end_date',           // lowercase
+      START_DATE: 'start_date',       // lowercase
+      NOTES: 'project_description',   // lowercase
+      SCOPE: 'Scope',                 // New dropdown field
+      RECORD_LINK: 'Link',
+      RECORD_COUNT: 'Record_Count',   // New number field
+      PERCENT_COMPLETE: 'Percent_Complete',
+      PROJECT_LEAD: 'Project_Lead',
+      COLLABORATORS: 'Collaborators'
+    },
+    
+    // Status options
+    STATUS: {
+      NOT_STARTED: 'Not started - Committed',
+      IN_PROGRESS: 'Ongoing',
+      COMPLETE: 'Complete',
+      ON_HOLD: 'On Hold'
+    },
+    
+    // Colors for visual indicators
+    COLORS: {
+      HIGH_PRIORITY: '#e74c3c',
+      OVERDUE: '#e74c3c',
+      DUE_SOON: '#f39c12',
+      IN_PROGRESS: '#3498db',
+      COMPLETE: '#27ae60'
+    }
+  };
+
+  // ============================================================
+  // STYLES
+  // ============================================================
+  
+  const STYLES = `
+    /* Status badges */
+    .crb-status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .crb-status-not-started { background: #ecf0f1; color: #7f8c8d; }
+    .crb-status-in-progress { background: #3498db; color: white; }
+    .crb-status-complete { background: #27ae60; color: white; }
+    .crb-status-on-hold { background: #f39c12; color: white; }
+    
+    /* Scope badges */
+    .crb-scope-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+    
+    .crb-scope-single { background: #e8f4f8; color: #2980b9; }
+    .crb-scope-batch { background: #fef3e2; color: #d68910; }
+    .crb-scope-view { background: #f5e6ff; color: #8e44ad; }
+    
+    /* Due date highlighting */
+    .crb-overdue {
+      color: #e74c3c !important;
+      font-weight: 600;
+    }
+    
+    .crb-due-soon {
+      color: #f39c12 !important;
+    }
+    
+    /* Quick action buttons */
+    .crb-quick-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    
+    .crb-action-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    
+    .crb-action-btn:hover {
+      transform: translateY(-1px);
+    }
+    
+    .crb-btn-start {
+      background: #3498db;
+      color: white;
+    }
+    
+    .crb-btn-complete {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .crb-btn-hold {
+      background: #f39c12;
+      color: white;
+    }
+    
+    .crb-btn-open-link {
+      background: #9b59b6;
+      color: white;
+    }
+    
+    /* Task summary card */
+    .crb-task-summary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+    }
+    
+    .crb-task-summary h3 {
+      margin: 0 0 12px 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    
+    .crb-task-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    
+    .crb-task-summary-item {
+      text-align: center;
+    }
+    
+    .crb-task-summary-value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    
+    .crb-task-summary-label {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    
+    /* List view row highlighting */
+    .crb-row-overdue {
+      background-color: #fdf2f2 !important;
+      border-left: 4px solid #e74c3c !important;
+    }
+    
+    .crb-row-due-soon {
+      border-left: 4px solid #f39c12 !important;
+    }
+    
+    .crb-row-complete {
+      opacity: 0.7;
+    }
+    
+    /* Record link button */
+    .crb-link-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      background: #9b59b6;
+      color: white;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    
+    .crb-link-btn:hover {
+      background: #8e44ad;
+      color: white;
+      text-decoration: none;
+    }
+    
+    /* Assignee display */
+    .crb-assignee-tag {
+      display: inline-block;
+      padding: 4px 10px;
+      background: #ecf0f1;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-right: 6px;
+      margin-bottom: 4px;
+    }
+  `;
+
+  // ============================================================
+  // UTILITY FUNCTIONS
+  // ============================================================
+  
+  function injectStyles() {
+    if (document.getElementById('crb-projects-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'crb-projects-styles';
+    style.textContent = STYLES;
+    document.head.appendChild(style);
+  }
+
+  function isOverdue(dateStr, status) {
+    if (!dateStr) return false;
+    if (status === CONFIG.STATUS.COMPLETE) return false;
+    const due = new Date(dateStr);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return due < today;
+  }
+
+  function isDueSoon(dateStr, days = 3) {
+    if (!dateStr) return false;
+    const due = new Date(dateStr);
+    const today = new Date();
+    const soon = new Date();
+    soon.setDate(soon.getDate() + days);
+    return due >= today && due <= soon;
+  }
+
+  function getFieldValue(record, fieldCode, defaultVal = '') {
+    if (!record || !record[fieldCode]) return defaultVal;
+    return record[fieldCode].value || defaultVal;
+  }
+
+  // ============================================================
+  // VISUAL ENHANCEMENTS
+  // ============================================================
+  
+  function addScopeBadge(record, spaceId) {
+    const space = kintone.app.record.getSpaceElement(spaceId);
+    if (!space) return;
+    
+    const scope = getFieldValue(record, CONFIG.FIELDS.SCOPE);
+    const recordCount = getFieldValue(record, CONFIG.FIELDS.RECORD_COUNT, 1);
+    
+    if (!scope) return;
+    
+    const badge = document.createElement('span');
+    badge.className = `crb-scope-badge crb-scope-${scope.toLowerCase().replace(' ', '-')}`;
+    
+    if (scope === 'Single Record') {
+      badge.textContent = '📄 Single Record';
+    } else if (scope === 'Batch') {
+      badge.textContent = `📦 Batch (${recordCount} records)`;
+    } else if (scope === 'View') {
+      badge.textContent = `📋 View (${recordCount} records)`;
+    }
+    
+    space.appendChild(badge);
+  }
+
+  function addRecordLinkButton(record, spaceId) {
+    const space = kintone.app.record.getSpaceElement(spaceId);
+    if (!space) return;
+    
+    const link = getFieldValue(record, CONFIG.FIELDS.RECORD_LINK);
+    if (!link) return;
+    
+    const container = document.createElement('div');
+    container.style.marginTop = '12px';
+    
+    const linkBtn = document.createElement('a');
+    linkBtn.className = 'crb-link-btn';
+    linkBtn.href = link;
+    linkBtn.target = '_blank';
+    linkBtn.innerHTML = '🔗 Open in DARB Database';
+    
+    container.appendChild(linkBtn);
+    space.appendChild(container);
+  }
+
+  function addQuickActions(record, spaceId) {
+    const space = kintone.app.record.getSpaceElement(spaceId);
+    if (!space) return;
+    
+    const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
+    
+    // Don't show actions for completed tasks
+    if (status === CONFIG.STATUS.COMPLETE) return;
+    
+    const container = document.createElement('div');
+    container.className = 'crb-quick-actions';
+    
+    // Start button (if not started)
+    if (status === CONFIG.STATUS.NOT_STARTED || status === 'Unprocessed') {
+      const startBtn = document.createElement('button');
+      startBtn.className = 'crb-action-btn crb-btn-start';
+      startBtn.innerHTML = '▶️ Start Task';
+      startBtn.onclick = () => updateStatus(CONFIG.STATUS.IN_PROGRESS);
+      container.appendChild(startBtn);
+    }
+    
+    // Complete button
+    const completeBtn = document.createElement('button');
+    completeBtn.className = 'crb-action-btn crb-btn-complete';
+    completeBtn.innerHTML = '✓ Mark Complete';
+    completeBtn.onclick = () => updateStatus(CONFIG.STATUS.COMPLETE);
+    container.appendChild(completeBtn);
+    
+    // Hold button (if in progress)
+    if (status === CONFIG.STATUS.IN_PROGRESS) {
+      const holdBtn = document.createElement('button');
+      holdBtn.className = 'crb-action-btn crb-btn-hold';
+      holdBtn.innerHTML = '⏸️ Put On Hold';
+      holdBtn.onclick = () => updateStatus(CONFIG.STATUS.ON_HOLD);
+      container.appendChild(holdBtn);
+    }
+    
+    space.appendChild(container);
+  }
+
+  async function updateStatus(newStatus) {
+    const recordId = kintone.app.record.getId();
+    
+    const body = {
+      app: kintone.app.getId(),
+      id: recordId,
+      record: {
+        [CONFIG.FIELDS.STATUS]: { value: newStatus }
+      }
+    };
+    
+    // Set completion percentage
+    if (newStatus === CONFIG.STATUS.COMPLETE) {
+      if (CONFIG.FIELDS.PERCENT_COMPLETE) {
+        body.record[CONFIG.FIELDS.PERCENT_COMPLETE] = { value: '100' };
+      }
+    }
+    
+    try {
+      await kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', body);
+      
+      if (typeof kintone.showNotification === 'function') {
+        kintone.showNotification({
+          text: `Status updated to: ${newStatus}`,
+          type: 'success'
+        });
+      } else {
+        alert(`Status updated to: ${newStatus}`);
+      }
+      
+      location.reload();
+    } catch (error) {
+      alert('Error updating status: ' + error.message);
+    }
+  }
+
+  // ============================================================
+  // LIST VIEW ENHANCEMENTS
+  // ============================================================
+  
+  function enhanceListView(records) {
+    setTimeout(() => {
+      const rows = document.querySelectorAll('.recordlist-row-gaia');
+      
+      rows.forEach((row, index) => {
+        if (index >= records.length) return;
+        
+        const record = records[index];
+        const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
+        const dueDate = getFieldValue(record, CONFIG.FIELDS.DUE_DATE);
+        
+        // Complete rows
+        if (status === CONFIG.STATUS.COMPLETE) {
+          row.classList.add('crb-row-complete');
+          return;
+        }
+        
+        // Overdue rows
+        if (isOverdue(dueDate, status)) {
+          row.classList.add('crb-row-overdue');
+        }
+        // Due soon rows
+        else if (isDueSoon(dueDate)) {
+          row.classList.add('crb-row-due-soon');
+        }
+      });
+    }, 300);
+  }
+
+  function addDashboardSummary(records) {
+    const headerSpace = kintone.app.getHeaderMenuSpaceElement();
+    if (!headerSpace) return;
+    
+    // Don't add if already exists
+    if (document.getElementById('crb-task-summary')) return;
+    
+    // Calculate stats
+    let total = records.length;
+    let notStarted = 0;
+    let inProgress = 0;
+    let complete = 0;
+    let overdue = 0;
+    
+    records.forEach(record => {
+      const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
+      const dueDate = getFieldValue(record, CONFIG.FIELDS.DUE_DATE);
+      
+      if (status === CONFIG.STATUS.COMPLETE) {
+        complete++;
+      } else if (status === CONFIG.STATUS.IN_PROGRESS || status === 'Ongoing') {
+        inProgress++;
+      } else {
+        notStarted++;
+      }
+      
+      if (isOverdue(dueDate, status)) {
+        overdue++;
+      }
+    });
+    
+    const summary = document.createElement('div');
+    summary.id = 'crb-task-summary';
+    summary.className = 'crb-task-summary';
+    summary.innerHTML = `
+      <h3>📊 Task Summary</h3>
+      <div class="crb-task-summary-grid">
+        <div class="crb-task-summary-item">
+          <div class="crb-task-summary-value">${total}</div>
+          <div class="crb-task-summary-label">Total Tasks</div>
+        </div>
+        <div class="crb-task-summary-item">
+          <div class="crb-task-summary-value">${inProgress}</div>
+          <div class="crb-task-summary-label">In Progress</div>
+        </div>
+        <div class="crb-task-summary-item">
+          <div class="crb-task-summary-value" style="color: ${overdue > 0 ? '#ffcccc' : 'white'}">${overdue}</div>
+          <div class="crb-task-summary-label">Overdue</div>
+        </div>
+      </div>
+    `;
+    
+    headerSpace.insertBefore(summary, headerSpace.firstChild);
+  }
+
+  // ============================================================
+  // EVENT HANDLERS
+  // ============================================================
+  
+  // Record Detail View
+  kintone.events.on('app.record.detail.show', function(event) {
+    const record = event.record;
+    
+    injectStyles();
+    
+    // Add visual enhancements (create these space elements in your form)
+    addScopeBadge(record, 'scope_badge_space');
+    addRecordLinkButton(record, 'record_link_space');
+    addQuickActions(record, 'quick_actions_space');
+    
+    return event;
+  });
+
+  // Record List View
+  kintone.events.on('app.record.index.show', function(event) {
+    injectStyles();
+    
+    if (event.records && event.records.length > 0) {
+      enhanceListView(event.records);
+      // Uncomment below to add dashboard summary
+      // addDashboardSummary(event.records);
+    }
+    
+    return event;
+  });
+
+  // Auto-set defaults on create
+  kintone.events.on('app.record.create.show', function(event) {
+    const record = event.record;
+    
+    // Set default status
+    if (CONFIG.FIELDS.STATUS && record[CONFIG.FIELDS.STATUS]) {
+      if (!record[CONFIG.FIELDS.STATUS].value || record[CONFIG.FIELDS.STATUS].value === 'Unprocessed') {
+        record[CONFIG.FIELDS.STATUS].value = CONFIG.STATUS.NOT_STARTED;
+      }
+    }
+    
+    // Set default scope
+    if (CONFIG.FIELDS.SCOPE && record[CONFIG.FIELDS.SCOPE]) {
+      if (!record[CONFIG.FIELDS.SCOPE].value) {
+        record[CONFIG.FIELDS.SCOPE].value = 'Single Record';
+      }
+    }
+    
+    return event;
+  });
+
+})();
