@@ -61,15 +61,16 @@
       'VASPs'
     ],
 
-    // Team members - uses Kintone login codes (not email)
+    // Team members - Kintone cloud login codes ARE the full email addresses.
+    // The API payload key is "code" but the value must be the email/login name.
     TEAM_MEMBERS: [
-      { name: 'Peter', code: 'peter' },
-      { name: 'Tamara Guy', code: 'tamara.guy' },
-      { name: 'Timothy Rogers', code: 'timothy.rogers' },
-      { name: 'Isaac Moriarty', code: 'isaac.moriarty' },
-      { name: 'Mel Dapanas', code: 'mel.dapanas' },
-      { name: 'Jaypee Ollos', code: 'jaypee.ollos' },
-      { name: 'James Francis', code: 'james.francis' }
+      { name: 'Peter', code: 'peter@crbmonitor.com' },
+      { name: 'Tamara Guy', code: 'tamara.guy@crbmonitor.com' },
+      { name: 'Timothy Rogers', code: 'timothy.rogers@crbmonitor.com' },
+      { name: 'Isaac Moriarty', code: 'isaac.moriarty@crbmonitor.com' },
+      { name: 'Mel Dapanas', code: 'mel.dapanas@crbmonitor.com' },
+      { name: 'Jaypee Ollos', code: 'joephillip.ollos@crbmonitor.com' },
+      { name: 'James Francis', code: 'james.francis@crbmonitor.com' }
     ],
 
     // Kintone groups authorized to see the Create Task button.
