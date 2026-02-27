@@ -285,6 +285,10 @@
     var companyName = r.company_name ? r.company_name.value : '';
     var darbId = r.Lookup ? r.Lookup.value : '';
     var headerEl = kintone.app.record.getHeaderMenuSpaceElement();
+
+    // Hide redundant fields - action buttons handle these
+    kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('escalated_to', false);
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
 
     // Helper: is this a "completed" status? Handles legacy values like "Complete - No Issues"

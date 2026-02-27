@@ -328,6 +328,11 @@
     var darbId = r.Lookup ? r.Lookup.value : '';
     var tier = r.tier ? r.tier.value : '';
     var headerEl = kintone.app.record.getHeaderMenuSpaceElement();
+
+    // Hide redundant fields - action buttons handle these
+    kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
+    kintone.app.record.setFieldShown('escalated_to', false);
     if (!headerEl || document.getElementById('crb-101-action-bar')) return event;
 
     // Helper: is this a "completed" status? Handles legacy values
