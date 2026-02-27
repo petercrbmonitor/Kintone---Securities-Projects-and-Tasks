@@ -607,7 +607,7 @@
 
   kintone.events.on('app.record.edit.submit', function(event) {
     var r = event.record;
-    var now = formatTimestamp();
+    var now = isoTimestamp();
     var user = kintone.getLoginUser().name || 'Unknown';
     var changes = [];
 
@@ -628,7 +628,7 @@
           value: {
             audit_action: { type: 'SINGLE_LINE_TEXT', value: c.action },
             audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-            audit_timestamp: { type: 'SINGLE_LINE_TEXT', value: now },
+            audit_timestamp: { type: 'DATETIME', value: now },
             audit_notes: { type: 'SINGLE_LINE_TEXT', value: c.notes }
           }
         });
@@ -642,16 +642,9 @@
   // HELPERS
   // ============================================================
 
-  // Enhancement 6: Human-readable timestamps
-  function formatTimestamp() {
-    var d = new Date();
-    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    var h = d.getHours(), ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12;
-    if (h === 0) h = 12;
-    var m = d.getMinutes();
-    if (m < 10) m = '0' + m;
-    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ' ' + h + ':' + m + ' ' + ampm;
+  // Kintone DATETIME fields require ISO 8601 format: YYYY-MM-DDTHH:mm:ssZ
+  function isoTimestamp() {
+    return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   }
 
   // Enhancement 5: Toast notification
@@ -717,7 +710,7 @@
       value: {
         audit_action: { type: 'SINGLE_LINE_TEXT', value: action },
         audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-        audit_timestamp: { type: 'SINGLE_LINE_TEXT', value: formatTimestamp() },
+        audit_timestamp: { type: 'DATETIME', value: isoTimestamp() },
         audit_notes: { type: 'SINGLE_LINE_TEXT', value: notes || '' }
       }
     });
