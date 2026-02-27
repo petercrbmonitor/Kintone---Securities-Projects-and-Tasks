@@ -1,8 +1,9 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
- * v7.1 - Fixed: subtable type properties for audit_log (edit.submit + REST API)
- * 
- * Statuses: Pending → Complete / Needs Analyst Review
+ * v7.2 - Enhanced: confirmation modal, guided escalation, guidance banner,
+ *         next-record navigation, readable timestamps
+ *
+ * Statuses: Pending -> Complete / Needs Analyst Review
  * Ops (Mel/Jaypee): Complete + Escalate buttons
  * Analyst (Peter/Tamara): Research Complete button
  * Escalation creates App 57 task (assign to + notes only)
@@ -23,6 +24,14 @@
 
   var RESEARCH_USERS = ['Peter', 'Tamara'];
   var _snapshot = {};
+
+  var ISSUE_CATEGORIES = [
+    'Data Mismatch',
+    'Missing Information',
+    'Source Discrepancy',
+    'Company Record Issue',
+    'Needs Further Research'
+  ];
 
   // ============================================================
   // STYLES
@@ -179,6 +188,80 @@
     .crb-message.show { display: block; }\
     .crb-message-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }\
     .crb-message-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }\
+    \
+    .crb-guidance-banner {\
+      background: linear-gradient(135deg, #eff6ff, #dbeafe);\
+      border: 1px solid #bfdbfe;\
+      border-radius: 8px;\
+      padding: 10px 16px;\
+      margin-bottom: 8px;\
+      font-size: 13px;\
+      color: #1e40af;\
+      display: flex;\
+      align-items: flex-start;\
+      gap: 10px;\
+      line-height: 1.5;\
+    }\
+    .crb-guidance-banner strong { color: #1e3a8a; }\
+    .crb-guidance-text { flex: 1; }\
+    .crb-guidance-dismiss {\
+      background: none;\
+      border: none;\
+      font-size: 18px;\
+      cursor: pointer;\
+      color: #93c5fd;\
+      padding: 0 2px;\
+      line-height: 1;\
+      flex-shrink: 0;\
+    }\
+    .crb-guidance-dismiss:hover { color: #1e40af; }\
+    \
+    .crb-confirm-detail {\
+      padding: 8px 0;\
+      font-size: 13px;\
+      color: #475569;\
+    }\
+    .crb-confirm-detail strong { color: #1e293b; }\
+    \
+    .crb-toast {\
+      position: fixed;\
+      top: 16px;\
+      left: 50%;\
+      transform: translateX(-50%);\
+      z-index: 10001;\
+      padding: 14px 22px;\
+      border-radius: 10px;\
+      font-size: 14px;\
+      font-weight: 500;\
+      box-shadow: 0 4px 24px rgba(0,0,0,0.18);\
+      display: flex;\
+      align-items: center;\
+      gap: 14px;\
+      animation: crb-toast-in 0.3s ease;\
+    }\
+    @keyframes crb-toast-in {\
+      from { opacity: 0; transform: translateX(-50%) translateY(-20px); }\
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }\
+    }\
+    .crb-toast-success { background: #166534; color: white; }\
+    .crb-toast-btn {\
+      background: rgba(255,255,255,0.2);\
+      border: 1px solid rgba(255,255,255,0.3);\
+      color: white;\
+      padding: 5px 14px;\
+      border-radius: 5px;\
+      cursor: pointer;\
+      font-size: 13px;\
+      font-weight: 600;\
+      white-space: nowrap;\
+    }\
+    .crb-toast-btn:hover { background: rgba(255,255,255,0.35); }\
+    \
+    .crb-category-hint {\
+      font-size: 11px;\
+      color: #94a3b8;\
+      margin-top: 4px;\
+    }\
   ';
 
   function injectStyles() {
@@ -199,8 +282,18 @@
     var recordId = kintone.app.record.getId();
     var loginUser = kintone.getLoginUser().name || '';
     var status = r.review_status ? r.review_status.value : '';
+    var companyName = r.company_name ? r.company_name.value : '';
+    var darbId = r.Lookup ? r.Lookup.value : '';
     var headerEl = kintone.app.record.getHeaderMenuSpaceElement();
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
+
+    // Helper: is this a "completed" status? Handles legacy values like "Complete - No Issues"
+    function isComplete(s) { return s && s.indexOf('Complete') === 0; }
+
+    // --- Enhancement 4: Guidance Banner (pending records only) ---
+    if (!isComplete(status) && status !== 'Needs Analyst Review') {
+      addGuidanceBanner(headerEl);
+    }
 
     var bar = document.createElement('div');
     bar.id = 'crb-102-action-bar';
@@ -221,27 +314,30 @@
     }
     bar.appendChild(pill);
 
-    // Helper: is this a "completed" status? Handles legacy values like "Complete - No Issues"
-    function isComplete(s) { return s && s.indexOf('Complete') === 0; }
-
     // --- Pending: Complete + Escalate (all users) ---
     if (!isComplete(status) && status !== 'Needs Analyst Review') {
       var completeBtn = document.createElement('button');
       completeBtn.className = 'crb-action-btn crb-btn-complete';
       completeBtn.textContent = '\u2713 Complete';
       completeBtn.onclick = function() {
-        completeBtn.disabled = true;
-        completeBtn.textContent = 'Saving...';
-        saveWithAudit(recordId, r, {
-          review_status: { value: 'Complete' },
-          review_date: { value: todayStr() }
-        }, 'Status: Complete', loginUser, 'Review completed')
-          .then(function() { location.reload(); })
-          .catch(function(e) {
-            alert('Save failed: ' + (e.message || e));
-            completeBtn.disabled = false;
-            completeBtn.textContent = '\u2713 Complete';
-          });
+        // Enhancement 1: Confirmation modal
+        openConfirmModal({
+          title: 'Confirm Complete',
+          subtitle: companyName + ' (DARB #' + darbId + ')',
+          headerColor: 'linear-gradient(135deg, #22c55e, #16a34a)',
+          outcomePreview: 'Review completed - no issues found',
+          confirmLabel: '\u2713 Complete Review',
+          confirmColor: '#22c55e',
+          onConfirm: function() {
+            return saveWithAudit(recordId, r, {
+              review_status: { value: 'Complete' },
+              review_date: { value: todayStr() }
+            }, 'Status: Complete', loginUser, 'Review completed')
+              .then(function() {
+                navigateToNextPending(recordId);
+              });
+          }
+        });
       };
       bar.appendChild(completeBtn);
 
@@ -254,24 +350,29 @@
       bar.appendChild(escalateBtn);
     }
 
-    // --- Escalated: Research Complete (all users) ---
+    // --- Escalated: Research Complete (analysts) ---
     if (status === 'Needs Analyst Review') {
       var researchBtn = document.createElement('button');
       researchBtn.className = 'crb-action-btn crb-btn-research';
       researchBtn.textContent = 'Research Complete';
       researchBtn.onclick = function() {
-        researchBtn.disabled = true;
-        researchBtn.textContent = 'Saving...';
-        saveWithAudit(recordId, r, {
-          review_status: { value: 'Complete' },
-          review_date: { value: todayStr() }
-        }, 'Status: Complete', loginUser, 'Research review completed')
-          .then(function() { location.reload(); })
-          .catch(function(e) {
-            alert('Save failed: ' + (e.message || e));
-            researchBtn.disabled = false;
-            researchBtn.textContent = 'Research Complete';
-          });
+        openConfirmModal({
+          title: 'Confirm Research Complete',
+          subtitle: companyName + ' (DARB #' + darbId + ')',
+          headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
+          outcomePreview: 'Research review completed by ' + loginUser,
+          confirmLabel: 'Complete Research',
+          confirmColor: '#6366f1',
+          onConfirm: function() {
+            return saveWithAudit(recordId, r, {
+              review_status: { value: 'Complete' },
+              review_date: { value: todayStr() }
+            }, 'Status: Complete', loginUser, 'Research review completed')
+              .then(function() {
+                navigateToNextPending(recordId);
+              });
+          }
+        });
       };
       bar.appendChild(researchBtn);
     }
@@ -281,12 +382,80 @@
   });
 
   // ============================================================
-  // ESCALATION MODAL (simplified: assign to + notes)
+  // CONFIRMATION MODAL (Enhancement 1)
+  // ============================================================
+
+  function openConfirmModal(options) {
+    var overlay = document.createElement('div');
+    overlay.id = 'crb-confirm-modal';
+    overlay.className = 'crb-modal-overlay';
+
+    var detailsHtml = '<div id="crb-confirm-msg" class="crb-message"></div>';
+    if (options.outcomePreview) {
+      detailsHtml += '<div class="crb-confirm-detail"><strong>Action:</strong> ' + esc(options.outcomePreview) + '</div>';
+    }
+
+    var headerBg = options.headerColor || 'linear-gradient(135deg, #22c55e, #16a34a)';
+    var btnColor = options.confirmColor || '#22c55e';
+
+    overlay.innerHTML = '\
+      <div class="crb-modal" style="width:400px;">\
+        <div class="crb-modal-header" style="background:' + headerBg + ';">\
+          <h3>' + esc(options.title) + '</h3>\
+          <div class="crb-modal-sub">' + esc(options.subtitle || '') + '</div>\
+        </div>\
+        <div class="crb-modal-body">\
+          ' + detailsHtml + '\
+        </div>\
+        <div class="crb-modal-footer">\
+          <button class="crb-modal-btn crb-modal-btn-secondary" id="crb-confirm-cancel">Cancel</button>\
+          <button class="crb-modal-btn crb-modal-btn-primary" id="crb-confirm-ok" style="background:' + btnColor + ';">' + esc(options.confirmLabel || 'Confirm') + '</button>\
+        </div>\
+      </div>';
+
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#crb-confirm-cancel').onclick = function() { overlay.remove(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    document.addEventListener('keydown', function escH(e) {
+      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escH); }
+    });
+
+    overlay.querySelector('#crb-confirm-ok').onclick = function() {
+      var btn = overlay.querySelector('#crb-confirm-ok');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      var result = options.onConfirm();
+      if (result && typeof result.then === 'function') {
+        result.then(function() {
+          overlay.remove();
+        }).catch(function(e) {
+          btn.disabled = false;
+          btn.textContent = options.confirmLabel || 'Confirm';
+          var msgEl = overlay.querySelector('#crb-confirm-msg');
+          if (msgEl) {
+            msgEl.className = 'crb-message crb-message-error show';
+            msgEl.textContent = 'Save failed: ' + (e.message || e);
+          }
+        });
+      }
+    };
+  }
+
+  // ============================================================
+  // ESCALATION MODAL (Enhancement 3: issue categories)
   // ============================================================
 
   function openEscalationModal(record, recordId, loginUser) {
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
+
+    // Build category options
+    var categoryOptions = '<option value="">-- Select a category --</option>';
+    for (var i = 0; i < ISSUE_CATEGORIES.length; i++) {
+      categoryOptions += '<option value="' + ISSUE_CATEGORIES[i] + '">' + ISSUE_CATEGORIES[i] + '</option>';
+    }
 
     var modalHtml = '\
       <div class="crb-modal">\
@@ -304,8 +473,13 @@
             </select>\
           </div>\
           <div class="crb-form-group">\
-            <label>What\'s the issue?</label>\
-            <textarea id="crb-notes" placeholder="Describe what needs analyst attention..."></textarea>\
+            <label>Issue Category</label>\
+            <select id="crb-category">' + categoryOptions + '</select>\
+            <div class="crb-category-hint">Helps the analyst know what to expect</div>\
+          </div>\
+          <div class="crb-form-group">\
+            <label>Describe the Issue</label>\
+            <textarea id="crb-notes" placeholder="What specifically needs analyst attention? Be as detailed as possible..."></textarea>\
           </div>\
         </div>\
         <div class="crb-modal-footer">\
@@ -330,8 +504,13 @@
     // Submit
     overlay.querySelector('#crb-submit').onclick = function() {
       var assignee = overlay.querySelector('#crb-assignee').value;
+      var category = overlay.querySelector('#crb-category').value;
       var notes = overlay.querySelector('#crb-notes').value;
 
+      if (!category) {
+        showMsg(overlay, 'Please select an issue category.', 'error');
+        return;
+      }
       if (!notes.trim()) {
         showMsg(overlay, 'Please describe the issue.', 'error');
         return;
@@ -341,17 +520,23 @@
       submitBtn.disabled = true;
       submitBtn.textContent = 'Creating...';
 
+      // Combine category + notes for audit trail and task description
+      var fullNotes = '[' + category + '] ' + notes;
+
       // Chain: save record FIRST, then create task
       saveWithAudit(recordId, record, {
         review_status: { value: 'Needs Analyst Review' },
         escalated_to: { value: assignee }
-      }, 'Escalated to ' + assignee, loginUser, notes)
+      }, 'Escalated to ' + assignee, loginUser, fullNotes)
         .then(function() {
-          return createApp57Task(record, recordId, assignee, loginUser, notes);
+          return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
         })
         .then(function() {
           showMsg(overlay, '\u2713 Sent to ' + assignee + ' - task created!', 'success');
-          setTimeout(function() { closeModal(); location.reload(); }, 1200);
+          setTimeout(function() {
+            closeModal();
+            navigateToNextPending(recordId);
+          }, 1200);
         })
         .catch(function(e) {
           showMsg(overlay, 'Error: ' + (e.message || e), 'error');
@@ -364,6 +549,36 @@
       var el = document.getElementById('crb-escalation-modal');
       if (el) el.remove();
     }
+  }
+
+  // ============================================================
+  // GUIDANCE BANNER (Enhancement 4)
+  // ============================================================
+
+  function addGuidanceBanner(headerEl) {
+    if (document.getElementById('crb-guidance')) return;
+    if (sessionStorage.getItem('crb-guidance-dismissed-102')) return;
+
+    var banner = document.createElement('div');
+    banner.id = 'crb-guidance';
+    banner.className = 'crb-guidance-banner';
+    banner.innerHTML = '<div class="crb-guidance-text">' +
+      '<strong>Review Steps:</strong> Verify this record\'s data matches the source. ' +
+      'If everything looks correct, click <strong>Complete</strong>. ' +
+      'If something needs analyst attention, click <strong>Escalate</strong> and describe the issue.' +
+      '</div>';
+
+    var dismissBtn = document.createElement('button');
+    dismissBtn.className = 'crb-guidance-dismiss';
+    dismissBtn.innerHTML = '&times;';
+    dismissBtn.title = 'Dismiss for this session';
+    dismissBtn.onclick = function() {
+      banner.remove();
+      sessionStorage.setItem('crb-guidance-dismissed-102', '1');
+    };
+    banner.appendChild(dismissBtn);
+
+    headerEl.appendChild(banner);
   }
 
   // ============================================================
@@ -381,7 +596,7 @@
 
   kintone.events.on('app.record.edit.submit', function(event) {
     var r = event.record;
-    var now = new Date().toISOString();
+    var now = formatTimestamp();
     var user = kintone.getLoginUser().name || 'Unknown';
     var changes = [];
 
@@ -416,6 +631,73 @@
   // HELPERS
   // ============================================================
 
+  // Enhancement 6: Human-readable timestamps
+  function formatTimestamp() {
+    var d = new Date();
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var h = d.getHours(), ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    var m = d.getMinutes();
+    if (m < 10) m = '0' + m;
+    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ' ' + h + ':' + m + ' ' + ampm;
+  }
+
+  // Enhancement 5: Toast notification
+  function showToast(msg, actions) {
+    var existing = document.getElementById('crb-toast');
+    if (existing) existing.remove();
+
+    var toast = document.createElement('div');
+    toast.id = 'crb-toast';
+    toast.className = 'crb-toast crb-toast-success';
+
+    var span = document.createElement('span');
+    span.textContent = msg;
+    toast.appendChild(span);
+
+    if (actions && actions.length) {
+      for (var i = 0; i < actions.length; i++) {
+        var btn = document.createElement('button');
+        btn.className = 'crb-toast-btn';
+        btn.textContent = actions[i].label;
+        btn.onclick = actions[i].onClick;
+        toast.appendChild(btn);
+      }
+    }
+    document.body.appendChild(toast);
+    return toast;
+  }
+
+  // Enhancement 5: Navigate to next pending record
+  function navigateToNextPending(currentId) {
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: APP_102,
+      query: 'review_status not in ("Complete","Needs Analyst Review") and $id != ' + currentId + ' order by $id asc limit 1',
+      fields: ['$id']
+    }).then(function(resp) {
+      if (resp.records.length > 0) {
+        var nextId = resp.records[0].$id.value;
+        showToast('\u2713 Done! Loading next record...', [
+          { label: 'Back to List', onClick: function() { window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/'; } }
+        ]);
+        setTimeout(function() {
+          window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/show#record=' + nextId;
+          location.reload();
+        }, 1500);
+      } else {
+        showToast('\u2713 All done! No more pending records.', [
+          { label: 'Back to List', onClick: function() { window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/'; } }
+        ]);
+        setTimeout(function() {
+          window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/';
+        }, 2500);
+      }
+    }).catch(function() {
+      location.reload();
+    });
+  }
+
   function saveWithAudit(recordId, record, updates, action, user, notes) {
     var auditLog = record.audit_log ? record.audit_log.value.map(function(row) {
       return { id: row.id, value: row.value };
@@ -424,7 +706,7 @@
       value: {
         audit_action: { type: 'SINGLE_LINE_TEXT', value: action },
         audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-        audit_timestamp: { type: 'SINGLE_LINE_TEXT', value: new Date().toISOString() },
+        audit_timestamp: { type: 'SINGLE_LINE_TEXT', value: formatTimestamp() },
         audit_notes: { type: 'SINGLE_LINE_TEXT', value: notes || '' }
       }
     });
