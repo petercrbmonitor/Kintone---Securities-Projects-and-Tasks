@@ -576,8 +576,8 @@
             <div class="crb-category-hint">Helps the analyst know what to expect</div>\
           </div>\
           <div class="crb-form-group">\
-            <label>Describe the Issue</label>\
-            <textarea id="crb-notes" placeholder="What specifically needs analyst attention? Be as detailed as possible..."></textarea>\
+            <label>Describe the Issue <span style="font-weight:normal;color:#94a3b8">(optional)</span></label>\
+            <textarea id="crb-notes" placeholder="Additional details for the analyst..."></textarea>\
           </div>\
         </div>\
         <div class="crb-modal-footer">\
@@ -609,17 +609,14 @@
         showMsg(overlay, 'Please select an issue category.', 'error');
         return;
       }
-      if (!notes.trim()) {
-        showMsg(overlay, 'Please describe the issue.', 'error');
-        return;
-      }
-
       var submitBtn = overlay.querySelector('#crb-submit');
       submitBtn.disabled = true;
       submitBtn.textContent = 'Creating...';
 
       // Combine category + notes for audit trail and task description
-      var fullNotes = '[' + category + '] ' + notes;
+      var fullNotes = notes.trim()
+        ? '[' + category + '] ' + notes
+        : '[' + category + ']';
       var outcomeVal = assignee === 'Peter' ? 'Flagged for Peter' : 'Flagged for Tamara';
 
       // Chain: save record FIRST, then create task
