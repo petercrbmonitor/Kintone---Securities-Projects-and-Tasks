@@ -17,13 +17,46 @@
   var APP_102 = 102;
   var KINTONE_BASE = location.origin;
 
-  var USER_MAP = {
-    'Peter': 'peter@crbmonitor.com',
-    'Tamara': 'tamara.guy@crbmonitor.com'
-  };
+  // Group-based roles (matches Kintone People & Groups)
+  var ANALYST_GROUP = 'Research Admins';
+  var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
 
-  var RESEARCH_USERS = ['Peter', 'Tamara'];
+  // Cached state
+  var _isAnalyst = null;
+  var _analystMembers = null;
   var _snapshot = {};
+
+  function getAnalystMembers() {
+    if (_analystMembers) return Promise.resolve(_analystMembers);
+    return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
+      code: ANALYST_GROUP
+    }).then(function(resp) {
+      _analystMembers = (resp.users || []).map(function(u) {
+        return { name: u.name, email: u.code };
+      });
+      return _analystMembers;
+    }).catch(function() {
+      _analystMembers = [];
+      return _analystMembers;
+    });
+  }
+
+  function checkIsAnalyst() {
+    if (_isAnalyst !== null) return Promise.resolve(_isAnalyst);
+    var loginCode = kintone.getLoginUser().code || '';
+    return kintone.api(kintone.api.url('/k/v1/user/groups', true), 'GET', {
+      code: loginCode
+    }).then(function(resp) {
+      var groups = resp.groups || [];
+      _isAnalyst = groups.some(function(g) {
+        return g.code === ANALYST_GROUP || g.name === ANALYST_GROUP;
+      });
+      return _isAnalyst;
+    }).catch(function() {
+      _isAnalyst = false;
+      return false;
+    });
+  }
 
   var ISSUE_CATEGORIES = [
     'Data Mismatch',
@@ -384,11 +417,15 @@
       bar.appendChild(revertBtn);
     }
 
-    // --- Escalated: Research Complete (analysts) ---
+    // --- Escalated: Research Complete (Research Admins only) ---
     if (status === 'Needs Analyst Review') {
       var researchBtn = document.createElement('button');
       researchBtn.className = 'crb-action-btn crb-btn-research';
       researchBtn.textContent = 'Research Complete';
+      researchBtn.style.display = 'none';
+      checkIsAnalyst().then(function(isAnalyst) {
+        if (isAnalyst) researchBtn.style.display = '';
+      });
       researchBtn.onclick = function() {
         openConfirmModal({
           title: 'Confirm Research Complete',
@@ -512,10 +549,7 @@
           <div id="crb-msg" class="crb-message"></div>\
           <div class="crb-form-group">\
             <label>Assign To</label>\
-            <select id="crb-assignee">\
-              <option value="Peter">Peter</option>\
-              <option value="Tamara">Tamara</option>\
-            </select>\
+            <select id="crb-assignee"><option value="">Loading analysts...</option></select>\
           </div>\
           <div class="crb-form-group">\
             <label>Issue Category</label>\
@@ -538,6 +572,15 @@
     overlay.className = 'crb-modal-overlay';
     overlay.innerHTML = modalHtml;
     document.body.appendChild(overlay);
+
+    // Populate analyst dropdown from Research Admins group
+    getAnalystMembers().then(function(members) {
+      var sel = overlay.querySelector('#crb-assignee');
+      if (!sel) return;
+      sel.innerHTML = members.map(function(m) {
+        return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
+      }).join('');
+    });
 
     // Close handlers
     overlay.querySelector('#crb-cancel').onclick = function() { closeModal(); };
@@ -761,7 +804,13 @@
   function createApp57Task(record, recordId, assignee, reviewer, notes) {
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
-    var assignTo = USER_MAP[assignee] || 'peter@crbmonitor.com';
+    // Resolve email from cached group members, fall back to default
+    var assignTo = DEFAULT_ASSIGNEE_EMAIL;
+    if (_analystMembers) {
+      for (var m = 0; m < _analystMembers.length; m++) {
+        if (_analystMembers[m].name === assignee) { assignTo = _analystMembers[m].email; break; }
+      }
+    }
     var reviewLink = KINTONE_BASE + '/k/102/show#record=' + recordId;
 
     return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {

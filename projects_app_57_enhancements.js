@@ -47,11 +47,11 @@
     
     // Colors for visual indicators
     COLORS: {
-      HIGH_PRIORITY: '#e74c3c',
-      OVERDUE: '#e74c3c',
-      DUE_SOON: '#f39c12',
-      IN_PROGRESS: '#3498db',
-      COMPLETE: '#27ae60'
+      HIGH_PRIORITY: '#ef4444',
+      OVERDUE: '#ef4444',
+      DUE_SOON: '#f59e0b',
+      IN_PROGRESS: '#3b82f6',
+      COMPLETE: '#22c55e'
     }
   };
 
@@ -69,10 +69,10 @@
       font-weight: 600;
     }
     
-    .crb-status-not-started { background: #ecf0f1; color: #7f8c8d; }
-    .crb-status-in-progress { background: #3498db; color: white; }
-    .crb-status-complete { background: #27ae60; color: white; }
-    .crb-status-on-hold { background: #f39c12; color: white; }
+    .crb-status-not-started { background: #f1f5f9; color: #64748b; }
+    .crb-status-in-progress { background: #3b82f6; color: white; }
+    .crb-status-complete { background: #22c55e; color: white; }
+    .crb-status-on-hold { background: #f59e0b; color: white; }
     
     /* Scope badges */
     .crb-scope-badge {
@@ -90,12 +90,12 @@
     
     /* Due date highlighting */
     .crb-overdue {
-      color: #e74c3c !important;
+      color: #ef4444 !important;
       font-weight: 600;
     }
-    
+
     .crb-due-soon {
-      color: #f39c12 !important;
+      color: #f59e0b !important;
     }
     
     /* Quick action buttons */
@@ -121,17 +121,17 @@
     }
     
     .crb-btn-start {
-      background: #3498db;
+      background: #3b82f6;
       color: white;
     }
-    
+
     .crb-btn-complete {
-      background: #27ae60;
+      background: #22c55e;
       color: white;
     }
-    
+
     .crb-btn-hold {
-      background: #f39c12;
+      background: #f59e0b;
       color: white;
     }
     
@@ -140,49 +140,14 @@
       color: white;
     }
     
-    /* Task summary card */
-    .crb-task-summary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 20px;
-      border-radius: 10px;
-      margin-bottom: 16px;
-    }
-    
-    .crb-task-summary h3 {
-      margin: 0 0 12px 0;
-      font-size: 16px;
-      font-weight: 600;
-    }
-    
-    .crb-task-summary-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
-    }
-    
-    .crb-task-summary-item {
-      text-align: center;
-    }
-    
-    .crb-task-summary-value {
-      font-size: 28px;
-      font-weight: 700;
-    }
-    
-    .crb-task-summary-label {
-      font-size: 12px;
-      opacity: 0.9;
-    }
-    
     /* List view row highlighting */
     .crb-row-overdue {
-      background-color: #fdf2f2 !important;
-      border-left: 4px solid #e74c3c !important;
+      background-color: #fef2f2 !important;
+      border-left: 4px solid #ef4444 !important;
     }
-    
+
     .crb-row-due-soon {
-      border-left: 4px solid #f39c12 !important;
+      border-left: 4px solid #f59e0b !important;
     }
     
     .crb-row-complete {
@@ -413,60 +378,6 @@
     }, 300);
   }
 
-  function addDashboardSummary(records) {
-    const headerSpace = kintone.app.getHeaderMenuSpaceElement();
-    if (!headerSpace) return;
-    
-    // Don't add if already exists
-    if (document.getElementById('crb-task-summary')) return;
-    
-    // Calculate stats
-    let total = records.length;
-    let notStarted = 0;
-    let inProgress = 0;
-    let complete = 0;
-    let overdue = 0;
-    
-    records.forEach(record => {
-      const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
-      const dueDate = getFieldValue(record, CONFIG.FIELDS.DUE_DATE);
-      
-      if (status === CONFIG.STATUS.COMPLETE) {
-        complete++;
-      } else if (status === CONFIG.STATUS.IN_PROGRESS || status === 'Ongoing') {
-        inProgress++;
-      } else {
-        notStarted++;
-      }
-      
-      if (isOverdue(dueDate, status)) {
-        overdue++;
-      }
-    });
-    
-    const summary = document.createElement('div');
-    summary.id = 'crb-task-summary';
-    summary.className = 'crb-task-summary';
-    summary.innerHTML = `
-      <h3>📊 Task Summary</h3>
-      <div class="crb-task-summary-grid">
-        <div class="crb-task-summary-item">
-          <div class="crb-task-summary-value">${total}</div>
-          <div class="crb-task-summary-label">Total Tasks</div>
-        </div>
-        <div class="crb-task-summary-item">
-          <div class="crb-task-summary-value">${inProgress}</div>
-          <div class="crb-task-summary-label">In Progress</div>
-        </div>
-        <div class="crb-task-summary-item">
-          <div class="crb-task-summary-value" style="color: ${overdue > 0 ? '#ffcccc' : 'white'}">${overdue}</div>
-          <div class="crb-task-summary-label">Overdue</div>
-        </div>
-      </div>
-    `;
-    
-    headerSpace.insertBefore(summary, headerSpace.firstChild);
-  }
 
   // ============================================================
   // EVENT HANDLERS
@@ -492,8 +403,6 @@
     
     if (event.records && event.records.length > 0) {
       enhanceListView(event.records);
-      // Uncomment below to add dashboard summary
-      // addDashboardSummary(event.records);
     }
     
     return event;

@@ -17,13 +17,55 @@
   var APP_101 = 101;
   var KINTONE_BASE = location.origin;
 
-  var USER_MAP = {
-    'Peter': 'peter@crbmonitor.com',
-    'Tamara': 'tamara.guy@crbmonitor.com'
+  // Group-based roles (matches Kintone People & Groups)
+  var ANALYST_GROUP = 'Research Admins';
+  var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
+
+  // Confirmation checkbox fields per analyst (Kintone field codes)
+  // Only analysts with dedicated checkbox fields need entries here
+  var ANALYST_CONFIRM = {
+    'Peter': 'confirmed_peter',
+    'Tamara': 'confirmed_peter_0'
   };
 
-  var RESEARCH_USERS = ['Peter', 'Tamara'];
+  // Cached state
+  var _isAnalyst = null;       // is current user a Research Admin?
+  var _analystMembers = null;  // [{name, email}] from group API
   var _snapshot = {};
+
+  // Fetch group members (cached per page load)
+  function getAnalystMembers() {
+    if (_analystMembers) return Promise.resolve(_analystMembers);
+    return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
+      code: ANALYST_GROUP
+    }).then(function(resp) {
+      _analystMembers = (resp.users || []).map(function(u) {
+        return { name: u.name, email: u.code };
+      });
+      return _analystMembers;
+    }).catch(function() {
+      _analystMembers = [];
+      return _analystMembers;
+    });
+  }
+
+  // Check if current user is in the analyst group (cached)
+  function checkIsAnalyst() {
+    if (_isAnalyst !== null) return Promise.resolve(_isAnalyst);
+    var loginCode = kintone.getLoginUser().code || '';
+    return kintone.api(kintone.api.url('/k/v1/user/groups', true), 'GET', {
+      code: loginCode
+    }).then(function(resp) {
+      var groups = resp.groups || [];
+      _isAnalyst = groups.some(function(g) {
+        return g.code === ANALYST_GROUP || g.name === ANALYST_GROUP;
+      });
+      return _isAnalyst;
+    }).catch(function() {
+      _isAnalyst = false;
+      return false;
+    });
+  }
 
   var ISSUE_CATEGORIES = [
     'Data Mismatch',
@@ -434,11 +476,15 @@
       bar.appendChild(revertBtn);
     }
 
-    // --- Escalated: Research Complete (analysts) ---
+    // --- Escalated: Research Complete (Research Admins only) ---
     if (status === 'Needs Analyst Review') {
       var researchBtn = document.createElement('button');
       researchBtn.className = 'crb-action-btn crb-btn-research';
       researchBtn.textContent = 'Research Complete';
+      researchBtn.style.display = 'none';
+      checkIsAnalyst().then(function(isAnalyst) {
+        if (isAnalyst) researchBtn.style.display = '';
+      });
       researchBtn.onclick = function() {
         openConfirmModal({
           title: 'Confirm Research Complete',
@@ -453,10 +499,9 @@
               review_date: { value: todayStr() },
               confirmation_date: { value: todayStr() }
             };
-            if (loginUser === 'Peter') {
-              updates.confirmed_peter = { value: ['Confirmed'] };
-            } else if (loginUser === 'Tamara') {
-              updates.confirmed_peter_0 = { value: ['Confirmed'] };
+            var confirmField = ANALYST_CONFIRM[loginUser];
+            if (confirmField) {
+              updates[confirmField] = { value: ['Confirmed'] };
             }
             return saveWithAudit(recordId, r, updates,
               'Confirmed by ' + loginUser, loginUser, 'Research review completed')
@@ -601,10 +646,7 @@
           <div id="crb-msg" class="crb-message"></div>\
           <div class="crb-form-group">\
             <label>Assign To</label>\
-            <select id="crb-assignee">\
-              <option value="Tamara">Tamara</option>\
-              <option value="Peter">Peter</option>\
-            </select>\
+            <select id="crb-assignee"><option value="">Loading analysts...</option></select>\
           </div>\
           <div class="crb-form-group">\
             <label>Issue Category</label>\
@@ -627,6 +669,15 @@
     overlay.className = 'crb-modal-overlay';
     overlay.innerHTML = modalHtml;
     document.body.appendChild(overlay);
+
+    // Populate analyst dropdown from Research Admins group
+    getAnalystMembers().then(function(members) {
+      var sel = overlay.querySelector('#crb-assignee');
+      if (!sel) return;
+      sel.innerHTML = members.map(function(m) {
+        return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
+      }).join('');
+    });
 
     // Close handlers
     overlay.querySelector('#crb-cancel').onclick = function() { closeModal(); };
@@ -653,7 +704,7 @@
       var fullNotes = notes.trim()
         ? '[' + category + '] ' + notes
         : '[' + category + ']';
-      var outcomeVal = assignee === 'Peter' ? 'Flagged for Peter' : 'Flagged for Tamara';
+      var outcomeVal = 'Flagged for ' + assignee;
 
       // Chain: save record FIRST, then create task
       saveWithAudit(recordId, record, {
@@ -865,7 +916,13 @@
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
     var tier = record.tier ? record.tier.value : '';
-    var assignTo = USER_MAP[assignee] || 'peter@crbmonitor.com';
+    // Resolve email from cached group members, fall back to default
+    var assignTo = DEFAULT_ASSIGNEE_EMAIL;
+    if (_analystMembers) {
+      for (var m = 0; m < _analystMembers.length; m++) {
+        if (_analystMembers[m].name === assignee) { assignTo = _analystMembers[m].email; break; }
+      }
+    }
     var reviewLink = KINTONE_BASE + '/k/101/show#record=' + recordId;
 
     // Gather flagged fields for task description
