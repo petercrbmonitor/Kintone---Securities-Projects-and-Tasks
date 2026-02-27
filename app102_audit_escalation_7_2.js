@@ -426,7 +426,18 @@
       btn.disabled = true;
       btn.textContent = 'Saving...';
 
-      var result = options.onConfirm();
+      try {
+        var result = options.onConfirm();
+      } catch (syncErr) {
+        btn.disabled = false;
+        btn.textContent = options.confirmLabel || 'Confirm';
+        var msgEl = overlay.querySelector('#crb-confirm-msg');
+        if (msgEl) {
+          msgEl.className = 'crb-message crb-message-error show';
+          msgEl.textContent = 'Save failed: ' + (syncErr.message || syncErr);
+        }
+        return;
+      }
       if (result && typeof result.then === 'function') {
         result.then(function() {
           overlay.remove();
