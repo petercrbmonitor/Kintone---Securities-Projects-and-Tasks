@@ -87,6 +87,10 @@
       background: linear-gradient(135deg, #6366f1, #4f46e5);\
       box-shadow: 0 2px 8px rgba(99,102,241,0.3);\
     }\
+    .crb-btn-revert {\
+      background: linear-gradient(135deg, #f59e0b, #d97706);\
+      box-shadow: 0 2px 8px rgba(245,158,11,0.3);\
+    }\
     .crb-status-pill {\
       display: inline-block;\
       padding: 4px 12px;\
@@ -403,6 +407,33 @@
       bar.appendChild(escalateBtn);
     }
 
+    // --- Complete: Revert to Pending ---
+    if (isComplete(status)) {
+      var revertBtn = document.createElement('button');
+      revertBtn.className = 'crb-action-btn crb-btn-revert';
+      revertBtn.textContent = '\u21A9 Revert to Pending';
+      revertBtn.onclick = function() {
+        openConfirmModal({
+          title: 'Revert to Pending',
+          subtitle: companyName + ' (DARB #' + darbId + ') - Tier ' + tier,
+          headerColor: 'linear-gradient(135deg, #f59e0b, #d97706)',
+          outcomePreview: 'Will re-open this record for review',
+          confirmLabel: 'Revert to Pending',
+          confirmColor: '#f59e0b',
+          onConfirm: function() {
+            return saveWithAudit(recordId, r, {
+              review_status: { value: 'Pending' },
+              review_outcome: { value: '' }
+            }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
+              .then(function() {
+                location.reload();
+              });
+          }
+        });
+      };
+      bar.appendChild(revertBtn);
+    }
+
     // --- Escalated: Research Complete (analysts) ---
     if (status === 'Needs Analyst Review') {
       var researchBtn = document.createElement('button');
@@ -694,6 +725,12 @@
       review_status: r.review_status ? r.review_status.value : '',
       escalated_to: r.escalated_to ? r.escalated_to.value : ''
     };
+
+    // Hide redundant fields - action buttons handle these
+    kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
+    kintone.app.record.setFieldShown('escalated_to', false);
+
     return event;
   });
 
@@ -718,10 +755,10 @@
       changes.forEach(function(c) {
         auditLog.push({
           value: {
-            audit_action: { type: 'SINGLE_LINE_TEXT', value: c.action },
-            audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-            audit_timestamp: { type: 'DATETIME', value: now },
-            audit_notes: { type: 'SINGLE_LINE_TEXT', value: c.notes }
+            audit_action: { value: c.action },
+            audit_user: { value: user },
+            audit_timestamp: { value: now },
+            audit_notes: { value: c.notes }
           }
         });
       });
