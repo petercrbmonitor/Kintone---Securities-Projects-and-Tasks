@@ -1,0 +1,266 @@
+/* ============================================================
+ * CRB Monitor - Clean View CSS v2
+ * For Apps 101 (Tier Review), 102 (Ops Review), 57 (Projects)
+ * Upload to each app: Settings > App settings > JS/CSS > CSS files
+ *
+ * v2 fixes: Removed aggressive toolbar/menu overrides that broke
+ *           Kintone native Edit/Delete/Options buttons
+ * ============================================================ */
+
+/* --- Base: Font & Background --- */
+body,
+.gaia-argoui-app,
+.gaia-argoui-app-show,
+.gaia-argoui-app-edit {
+  font-family: Calibri, 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Softer page background */
+.gaia-argoui-app-show,
+.gaia-argoui-app-edit,
+.record-gaia {
+  background: #f8f9fb !important;
+}
+
+/* ============================================================
+ * DETAIL VIEW (Record View)
+ * ============================================================ */
+
+/* Field labels - quieter, smaller */
+.control-label-gaia {
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  color: #6b7280 !important;
+  letter-spacing: 0.01em;
+  padding-bottom: 1px !important;
+}
+
+/* Field values - clear, readable */
+.control-value-gaia {
+  font-size: 14px !important;
+  color: #1e293b !important;
+  line-height: 1.4 !important;
+  padding: 3px 0 !important;
+}
+
+/* Field group rows - compact */
+.row-gaia {
+  border-bottom: 1px solid #f0f1f3 !important;
+  padding: 1px 0 !important;
+}
+
+/* Remove heavy cell borders in detail view */
+.control-gaia {
+  border: none !important;
+}
+
+/* ============================================================
+ * EDIT VIEW
+ * ============================================================ */
+
+/* Text inputs */
+.input-text-cybozu,
+.input-number-cybozu {
+  font-family: Calibri, 'Segoe UI', system-ui, sans-serif !important;
+  font-size: 14px !important;
+  color: #1e293b !important;
+  border: 1px solid #e2e4e8 !important;
+  border-radius: 4px !important;
+  padding: 7px 10px !important;
+  background: #fff !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-text-cybozu:focus,
+.input-number-cybozu:focus {
+  border-color: #94a3b8 !important;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.12) !important;
+  outline: none !important;
+}
+
+/* Textareas */
+.input-textarea-cybozu {
+  font-family: Calibri, 'Segoe UI', system-ui, sans-serif !important;
+  font-size: 14px !important;
+  color: #1e293b !important;
+  border: 1px solid #e2e4e8 !important;
+  border-radius: 4px !important;
+  padding: 8px 10px !important;
+  background: #fff !important;
+  line-height: 1.55 !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-textarea-cybozu:focus {
+  border-color: #94a3b8 !important;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.12) !important;
+  outline: none !important;
+}
+
+/* Dropdowns */
+.gaia-argoui-select,
+.gaia-argoui-select-menu {
+  font-family: Calibri, 'Segoe UI', system-ui, sans-serif !important;
+  font-size: 13.5px !important;
+  border-radius: 4px !important;
+}
+
+/* Radio buttons & checkboxes - spacing */
+.input-radio-item-cybozu,
+.input-checkbox-item-cybozu {
+  margin-right: 14px !important;
+  font-size: 13.5px !important;
+}
+
+/* ============================================================
+ * SUBTABLES (Audit Log, etc.)
+ * ============================================================ */
+
+/* Table header - sticky, subtle */
+.subtable-gaia .subtable-header-gaia th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f1f3f5 !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  color: #64748b !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 2px solid #e2e4e8 !important;
+  padding: 8px 10px !important;
+}
+
+/* Table cells - fit content, faint borders */
+.subtable-gaia td {
+  font-size: 13px !important;
+  padding: 6px 10px !important;
+  border-color: #f0f1f3 !important;
+  vertical-align: middle !important;
+}
+
+/* Table fits content width */
+.subtable-gaia {
+  border-collapse: collapse;
+  border: none !important;
+}
+
+/* Subtable row hover */
+.subtable-gaia .subtable-row-gaia:hover td {
+  background: #f8fafc !important;
+}
+
+/* ============================================================
+ * RECORD LIST VIEW
+ * ============================================================ */
+
+/* List header */
+.recordlist-header-cell-gaia {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #64748b !important;
+  background: #f8f9fb !important;
+  border-bottom: 2px solid #e2e4e8 !important;
+  padding: 8px 10px !important;
+}
+
+/* List cells */
+.recordlist-cell-gaia {
+  font-size: 13.5px !important;
+  color: #334155 !important;
+  padding: 7px 10px !important;
+  border-bottom: 1px solid #f0f1f3 !important;
+}
+
+/* Row hover */
+.recordlist-row-gaia:hover .recordlist-cell-gaia {
+  background: #f1f5f9 !important;
+}
+
+/* ============================================================
+ * CHROME: Layout Container Only
+ * NOTE: Do NOT style .gaia-argoui-app-toolbar or
+ *       .gaia-argoui-app-menu - these contain native Kintone
+ *       Edit/Delete/Options buttons that break with overrides.
+ * ============================================================ */
+
+/* Remove outer wrapper border on record detail */
+.layout-gaia {
+  border: none !important;
+  box-shadow: none !important;
+  background: #fff !important;
+  border-radius: 6px !important;
+  margin: 4px 0 !important;
+}
+
+/* Reduce record header/toolbar spacing */
+.gaia-argoui-app-index-pager,
+.gaia-argoui-app-menu {
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+}
+
+/* Reduce blank spacer noise */
+.control-spacer-field-gaia {
+  min-height: 2px !important;
+  height: 2px !important;
+}
+
+/* Group fields - clean border */
+.control-group-gaia {
+  border: 1px solid #e8eaed !important;
+  border-radius: 6px !important;
+  margin: 4px 0 !important;
+}
+
+.control-group-label-gaia {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+}
+
+/* ============================================================
+ * BUTTONS & ACTIONS
+ * ============================================================ */
+
+/* Save / Submit button polish */
+.gaia-argoui-app-edit-buttons .gaia-ui-actionmenu-save {
+  border-radius: 5px !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+}
+
+/* ============================================================
+ * MISC: Links, Lookup, Spacing
+ * ============================================================ */
+
+/* Lookup field values */
+.control-value-gaia a {
+  color: #2563eb !important;
+  text-decoration: none !important;
+}
+
+.control-value-gaia a:hover {
+  text-decoration: underline !important;
+}
+
+/* Blank space fields - reduce noise */
+.control-spacer-field-gaia {
+  min-height: 4px !important;
+}
+
+/* Scrollbar refinement */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
