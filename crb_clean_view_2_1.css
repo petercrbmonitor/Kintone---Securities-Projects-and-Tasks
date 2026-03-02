@@ -1,0 +1,308 @@
+/* ============================================================
+ * CRB Monitor - Clean View CSS v3
+ * For Apps 101 (Tier Review), 102 (Ops Review), 57 (Projects)
+ * Upload to each app: Settings > App settings > JS/CSS > CSS files
+ *
+ * v3: Full rewrite. Works WITH Kintone, not against it.
+ *     - Readable sizes (no sub-12px text)
+ *     - Comfortable spacing
+ *     - Status-aware colors for list + detail views
+ *     - Does NOT touch toolbar/menu/action buttons
+ * ============================================================ */
+
+
+/* ======================
+   1. TYPOGRAPHY
+   ====================== */
+
+body,
+.gaia-argoui-app {
+  font-family: Calibri, 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Field labels */
+.control-label-gaia {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #64748b !important;
+  letter-spacing: 0.02em;
+}
+
+/* Field values */
+.control-value-gaia {
+  font-size: 14px !important;
+  color: #1e293b !important;
+  line-height: 1.5 !important;
+}
+
+
+/* ======================
+   2. DETAIL VIEW LAYOUT
+   ====================== */
+
+/* Page background */
+.gaia-argoui-app-show,
+.gaia-argoui-app-edit,
+.record-gaia {
+  background: #f8f9fb !important;
+}
+
+/* Record card */
+.layout-gaia {
+  background: #fff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  margin: 8px 0 !important;
+}
+
+/* Field rows - comfortable spacing */
+.row-gaia {
+  border-bottom: 1px solid #f1f5f9 !important;
+  padding: 4px 0 !important;
+}
+
+/* Remove heavy cell borders */
+.control-gaia {
+  border: none !important;
+}
+
+/* Section groups */
+.control-group-gaia {
+  border: 1px solid #e2e4e8 !important;
+  border-radius: 8px !important;
+  margin: 8px 0 !important;
+  padding: 4px !important;
+}
+
+.control-group-label-gaia {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #334155 !important;
+  padding: 6px 12px !important;
+}
+
+/* Spacer fields - don't crush them */
+.control-spacer-field-gaia {
+  min-height: 8px !important;
+}
+
+/* Links */
+.control-value-gaia a {
+  color: #2563eb !important;
+  text-decoration: none !important;
+}
+.control-value-gaia a:hover {
+  text-decoration: underline !important;
+}
+
+
+/* ======================
+   3. EDIT VIEW
+   ====================== */
+
+/* Text inputs */
+.input-text-cybozu,
+.input-number-cybozu {
+  font-family: inherit !important;
+  font-size: 14px !important;
+  color: #1e293b !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+  background: #fff !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-text-cybozu:focus,
+.input-number-cybozu:focus {
+  border-color: #6366f1 !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+  outline: none !important;
+}
+
+/* Textareas */
+.input-textarea-cybozu {
+  font-family: inherit !important;
+  font-size: 14px !important;
+  color: #1e293b !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 6px !important;
+  padding: 10px 12px !important;
+  background: #fff !important;
+  line-height: 1.6 !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-textarea-cybozu:focus {
+  border-color: #6366f1 !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+  outline: none !important;
+}
+
+/* Dropdowns */
+.gaia-argoui-select {
+  font-family: inherit !important;
+  font-size: 14px !important;
+  border-radius: 6px !important;
+}
+
+/* Radio & checkbox items */
+.input-radio-item-cybozu,
+.input-checkbox-item-cybozu {
+  margin-right: 16px !important;
+  font-size: 14px !important;
+}
+
+/* Save button */
+.gaia-argoui-app-edit-buttons .gaia-ui-actionmenu-save {
+  border-radius: 6px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+}
+
+
+/* ======================
+   4. SUBTABLES (Audit Log)
+   ====================== */
+
+.subtable-gaia {
+  border-collapse: collapse;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+/* Header row */
+.subtable-gaia .subtable-header-gaia th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: #475569 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid #e2e4e8 !important;
+  padding: 10px 12px !important;
+}
+
+/* Cells */
+.subtable-gaia td {
+  font-size: 13px !important;
+  padding: 8px 12px !important;
+  border-color: #f1f5f9 !important;
+  vertical-align: middle !important;
+  color: #334155 !important;
+}
+
+/* Row hover */
+.subtable-gaia .subtable-row-gaia:hover td {
+  background: #f8fafc !important;
+}
+
+/* Alternate rows for readability */
+.subtable-gaia .subtable-row-gaia:nth-child(even) td {
+  background: #fafbfc !important;
+}
+
+
+/* ======================
+   5. LIST VIEW
+   ====================== */
+
+/* Column headers */
+.recordlist-header-cell-gaia {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: #475569 !important;
+  background: #f8fafc !important;
+  border-bottom: 2px solid #e2e4e8 !important;
+  padding: 10px 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Data cells */
+.recordlist-cell-gaia {
+  font-size: 14px !important;
+  color: #1e293b !important;
+  padding: 10px 12px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+/* Row hover */
+.recordlist-row-gaia:hover .recordlist-cell-gaia {
+  background: #f1f5f9 !important;
+}
+
+/* Alternating rows */
+.recordlist-row-gaia:nth-child(even) .recordlist-cell-gaia {
+  background: #fafbfc;
+}
+.recordlist-row-gaia:nth-child(even):hover .recordlist-cell-gaia {
+  background: #f1f5f9 !important;
+}
+
+
+/* ======================
+   6. STATUS COLORS
+   (applied by JS via classes)
+   ====================== */
+
+/* Overdue row - red left border */
+.crb-row-overdue {
+  border-left: 4px solid #ef4444 !important;
+}
+.crb-row-overdue .recordlist-cell-gaia {
+  background: #fef2f2 !important;
+}
+
+/* Due soon - amber left border */
+.crb-row-due-soon {
+  border-left: 4px solid #f59e0b !important;
+}
+
+/* Complete row - muted */
+.crb-row-complete .recordlist-cell-gaia {
+  color: #94a3b8 !important;
+  background: #fafafa !important;
+}
+
+
+/* ======================
+   7. TOOLBAR / CHROME
+   Keep hands off native buttons.
+   Only touch spacing.
+   ====================== */
+
+/* Slight spacing reduction on pager/menu bar */
+.gaia-argoui-app-index-pager,
+.gaia-argoui-app-menu {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+
+
+/* ======================
+   8. SCROLLBAR
+   ====================== */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
