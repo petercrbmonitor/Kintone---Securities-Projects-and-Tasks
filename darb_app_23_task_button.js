@@ -44,6 +44,7 @@
       RECORD_LINK: 'Link',                // Link field - already exists
       RECORD_COUNT: 'Record_Count',       // Number - ADD THIS
       SOURCE_RECORD_ID: 'Source_Record_ID', // Number - ADD THIS (optional)
+      SOURCE_APP: 'Source_App',            // Tracks which app created the task
       SAVED_IN: 'Saved_In'                // Saved In field - already exists
     },
 
@@ -861,6 +862,9 @@
     }
     if (fields.SOURCE_RECORD_ID && taskData.sourceRecordId) {
       body.record[fields.SOURCE_RECORD_ID] = { value: taskData.sourceRecordId };
+    }
+    if (fields.SOURCE_APP) {
+      body.record[fields.SOURCE_APP] = { value: 'DARB (23)' };
     }
     if (fields.SAVED_IN) {
       body.record[fields.SAVED_IN] = { value: 'Kintone' };
