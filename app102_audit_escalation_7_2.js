@@ -1,5 +1,10 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v7.6 - Fixed: fallback analyst caching (Tamara now resolves correctly),
+ *         ESC listener leak in confirm modals, XSS in task descriptions
+ *         Added: auto-close App 57 task on Research Complete,
+ *         category-to-task-type mapping, safer escalation order
+ *         (task created before record updated)
  * v7.5 - Added: resolution_type tracking on Complete and Research Complete
  *         for effectiveness reporting (No Changes Required / Data Corrected /
  *         Information Added / Record Updated)
@@ -27,6 +32,12 @@
   var ANALYST_GROUP = 'Research Admins';
   var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
 
+  // Fallback analyst list if group API fails (permissions, network, etc.)
+  var FALLBACK_ANALYSTS = [
+    { name: 'Peter', email: 'peter@crbmonitor.com' },
+    { name: 'Tamara', email: 'tamara.guy@crbmonitor.com' }
+  ];
+
   // Cached state
   var _isAnalyst = null;
   var _analystMembers = null;
@@ -40,10 +51,14 @@
       _analystMembers = (resp.users || []).map(function(u) {
         return { name: u.name, email: u.code };
       });
+      if (_analystMembers.length === 0) {
+        _analystMembers = FALLBACK_ANALYSTS;
+      }
       return _analystMembers;
     }).catch(function() {
-      // Don't cache failures so next call retries the API
-      return [];
+      // Group API failed — cache fallback so email resolution works on submit
+      _analystMembers = FALLBACK_ANALYSTS;
+      return FALLBACK_ANALYSTS;
     });
   }
 
@@ -78,6 +93,14 @@
     'Information Added',
     'Record Updated'
   ];
+
+  var CATEGORY_TO_TASK_TYPE = {
+    'Data Mismatch': 'Database Maintenance',
+    'Missing Information': 'Database Maintenance',
+    'Source Discrepancy': 'Database Maintenance',
+    'Company Record Issue': 'Database Maintenance',
+    'Needs Further Research': 'Research'
+  };
 
   // ============================================================
   // STYLES
@@ -479,6 +502,9 @@
               resolution_type: { value: resolution }
             }, 'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
               .then(function() {
+                return closeApp57Task('Ops Review (102)', recordId);
+              })
+              .then(function() {
                 navigateToNextPending(recordId);
               });
           }
@@ -550,11 +576,17 @@
 
     document.body.appendChild(overlay);
 
-    overlay.querySelector('#crb-confirm-cancel').onclick = function() { overlay.remove(); };
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-    document.addEventListener('keydown', function escH(e) {
-      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escH); }
-    });
+    function cleanup() {
+      document.removeEventListener('keydown', escH);
+      overlay.remove();
+    }
+    function escH(e) {
+      if (e.key === 'Escape') cleanup();
+    }
+    document.addEventListener('keydown', escH);
+
+    overlay.querySelector('#crb-confirm-cancel').onclick = function() { cleanup(); };
+    overlay.onclick = function(e) { if (e.target === overlay) cleanup(); };
 
     overlay.querySelector('#crb-confirm-ok').onclick = function() {
       // Run optional validation before confirming
@@ -588,7 +620,7 @@
       }
       if (result && typeof result.then === 'function') {
         result.then(function() {
-          overlay.remove();
+          cleanup();
         }).catch(function(e) {
           btn.disabled = false;
           btn.textContent = options.confirmLabel || 'Confirm';
@@ -697,14 +729,15 @@
 
       var outcomeVal = 'Flagged for ' + assignee;
 
-      // Chain: save record FIRST, then create task
-      saveWithAudit(recordId, record, {
-        review_status: { value: 'Needs Analyst Review' },
-        escalated_to: { value: assignee },
-        review_outcome: { value: outcomeVal }
-      }, 'Escalated to ' + assignee, loginUser, fullNotes)
+      // Create task first — if it fails, the review record is untouched.
+      // If record update then fails, the duplicate check prevents re-creation on retry.
+      createApp57Task(record, recordId, assignee, loginUser, fullNotes, category)
         .then(function() {
-          return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
+          return saveWithAudit(recordId, record, {
+            review_status: { value: 'Needs Analyst Review' },
+            escalated_to: { value: assignee },
+            review_outcome: { value: outcomeVal }
+          }, 'Escalated to ' + assignee, loginUser, fullNotes);
         })
         .then(function() {
           showMsg(overlay, '\u2713 Sent to ' + assignee + ' - task created!', 'success');
@@ -892,7 +925,27 @@
     });
   }
 
-  function createApp57Task(record, recordId, assignee, reviewer, notes) {
+  function closeApp57Task(sourceApp, recordId) {
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: APP_57,
+      query: 'Source_App in ("' + sourceApp + '") and Source_Record_ID = "' + recordId + '" and status not in ("Complete","Canceled") limit 1',
+      fields: ['$id']
+    }).then(function(resp) {
+      if (resp.records.length === 0) return;
+      return kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+        app: APP_57,
+        id: resp.records[0].$id.value,
+        record: {
+          status: { value: 'Complete' },
+          Percent_Complete: { value: '100' }
+        }
+      });
+    }).catch(function() {
+      // Non-critical: task stays open if this fails
+    });
+  }
+
+  function createApp57Task(record, recordId, assignee, reviewer, notes, category) {
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
     // Resolve email from cached group members, fall back to default
@@ -913,17 +966,19 @@
         return resp.records[0];
       }
 
-      var description = '<div>Ops Review escalated to ' + assignee + '<br>'
-        + companyName + ' (DARB #' + darbId + ')<br>'
-        + 'Reviewer: ' + reviewer + '<br>'
-        + 'Notes: ' + notes
+      var description = '<div>Ops Review escalated to ' + esc(assignee) + '<br>'
+        + esc(companyName) + ' (DARB #' + esc(darbId) + ')<br>'
+        + 'Reviewer: ' + esc(reviewer) + '<br>'
+        + 'Notes: ' + esc(notes)
         + '</div>';
+
+      var taskType = (category && CATEGORY_TO_TASK_TYPE[category]) || 'Database Maintenance';
 
       return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
         app: APP_57,
         record: {
           Project_Name: { value: 'Ops: ' + companyName },
-          Project_Field: { value: 'Database Maintenance' },
+          Project_Field: { value: taskType },
           Task_Assignee: { value: [{ code: assignTo }] },
           Source_Record_ID: { value: String(recordId) },
           Source_App: { value: 'Ops Review (102)' },
