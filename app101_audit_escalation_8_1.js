@@ -1,5 +1,11 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.4 - Fixed: fallback analyst caching, ESC listener leak, XSS in task
+ *         descriptions, missing review_outcome on Research Complete
+ *         Added: resolution_type tracking (auto on Complete, dropdown on
+ *         Research Complete), auto-close App 57 task on Research Complete,
+ *         category-to-task-type mapping, safer escalation order, full
+ *         field clearing on Revert (escalated_to, confirmation, resolution)
  * v8.3 - Fixed: dropdown caching bug, assignee validation, select appearance
  *         Enhanced: confirmation modal, flag summary, guided escalation,
  *         guidance banner, next-record navigation, readable timestamps
@@ -54,7 +60,8 @@
       }
       return _analystMembers;
     }).catch(function() {
-      // Group API failed — use fallback so dropdown always works
+      // Group API failed — cache fallback so email resolution works on submit
+      _analystMembers = FALLBACK_ANALYSTS;
       return FALLBACK_ANALYSTS;
     });
   }
@@ -84,6 +91,21 @@
     'Securities / Exchange Issue',
     'Needs Further Research'
   ];
+
+  var RESOLUTION_TYPES = [
+    'No Changes Required',
+    'Data Corrected',
+    'Information Added',
+    'Record Updated'
+  ];
+
+  var CATEGORY_TO_TASK_TYPE = {
+    'Data Mismatch': 'Database Maintenance',
+    'Missing Information': 'Database Maintenance',
+    'Tier Classification Question': 'Tier/Profile Reviews',
+    'Securities / Exchange Issue': 'Database Maintenance',
+    'Needs Further Research': 'Research'
+  };
 
   var FLAG_DEFS = [
     { code: 'flag_description', label: 'Business Description', note: 'note_description' },
@@ -442,11 +464,13 @@
           confirmLabel: '\u2713 Complete Review',
           confirmColor: '#22c55e',
           onConfirm: function() {
+            var resolutionVal = hasFlags ? 'Record Updated' : 'No Changes Required';
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
-              review_outcome: { value: outcomeVal }
-            }, 'Status: Complete', loginUser, hasFlags ? 'Updates made' : 'No changes needed')
+              review_outcome: { value: outcomeVal },
+              resolution_type: { value: resolutionVal }
+            }, 'Status: Complete', loginUser, 'Resolution: ' + resolutionVal)
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -478,10 +502,20 @@
           confirmLabel: 'Revert to Pending',
           confirmColor: '#f59e0b',
           onConfirm: function() {
-            return saveWithAudit(recordId, r, {
+            var revertUpdates = {
               review_status: { value: 'Pending' },
-              review_outcome: { value: '' }
-            }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
+              review_outcome: { value: '' },
+              escalated_to: { value: '' },
+              resolution_type: { value: '' },
+              confirmation_date: { value: null }
+            };
+            // Clear analyst confirmation checkboxes
+            var confirmKeys = Object.keys(ANALYST_CONFIRM);
+            for (var ci = 0; ci < confirmKeys.length; ci++) {
+              revertUpdates[ANALYST_CONFIRM[confirmKeys[ci]]] = { value: [] };
+            }
+            return saveWithAudit(recordId, r, revertUpdates,
+              'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
               .then(function() {
                 location.reload();
               });
@@ -505,21 +539,33 @@
           title: 'Confirm Research Complete',
           subtitle: companyName + ' (DARB #' + darbId + ')',
           headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-          outcomePreview: 'Confirmed by ' + loginUser,
+          outcomePreview: 'Research review completed by ' + loginUser,
+          formHtml: buildResolutionDropdown('crb-resolution-type'),
           confirmLabel: 'Complete Research',
           confirmColor: '#6366f1',
-          onConfirm: function() {
+          validate: function(overlay) {
+            var val = overlay.querySelector('#crb-resolution-type').value;
+            if (!val) return 'Please select whether changes were made.';
+            return null;
+          },
+          onConfirm: function(overlay) {
+            var resolution = overlay.querySelector('#crb-resolution-type').value;
             var updates = {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
-              confirmation_date: { value: todayStr() }
+              confirmation_date: { value: todayStr() },
+              review_outcome: { value: 'Analyst Reviewed' },
+              resolution_type: { value: resolution }
             };
             var confirmField = ANALYST_CONFIRM[loginUser];
             if (confirmField) {
               updates[confirmField] = { value: ['Confirmed'] };
             }
             return saveWithAudit(recordId, r, updates,
-              'Confirmed by ' + loginUser, loginUser, 'Research review completed')
+              'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
+              .then(function() {
+                return closeApp57Task('Tier Review (101)', recordId);
+              })
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -537,6 +583,18 @@
   // CONFIRMATION MODAL (Enhancement 1)
   // ============================================================
 
+  function buildResolutionDropdown(selectId) {
+    var opts = '<option value="">-- Select resolution --</option>';
+    for (var i = 0; i < RESOLUTION_TYPES.length; i++) {
+      opts += '<option value="' + RESOLUTION_TYPES[i] + '">' + RESOLUTION_TYPES[i] + '</option>';
+    }
+    return '\
+      <div class="crb-form-group" style="margin-top:12px;">\
+        <label style="font-weight:600;color:#334155;">Were changes made?</label>\
+        <select id="' + selectId + '" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">' + opts + '</select>\
+      </div>';
+  }
+
   function openConfirmModal(options) {
     var overlay = document.createElement('div');
     overlay.id = 'crb-confirm-modal';
@@ -548,6 +606,9 @@
     }
     if (options.outcomePreview) {
       detailsHtml += '<div class="crb-confirm-detail"><strong>Review Outcome:</strong> ' + esc(options.outcomePreview) + '</div>';
+    }
+    if (options.formHtml) {
+      detailsHtml += options.formHtml;
     }
 
     var headerBg = options.headerColor || 'linear-gradient(135deg, #22c55e, #16a34a)';
@@ -570,19 +631,37 @@
 
     document.body.appendChild(overlay);
 
-    overlay.querySelector('#crb-confirm-cancel').onclick = function() { overlay.remove(); };
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-    document.addEventListener('keydown', function escH(e) {
-      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escH); }
-    });
+    function cleanup() {
+      document.removeEventListener('keydown', escH);
+      overlay.remove();
+    }
+    function escH(e) {
+      if (e.key === 'Escape') cleanup();
+    }
+    document.addEventListener('keydown', escH);
+
+    overlay.querySelector('#crb-confirm-cancel').onclick = function() { cleanup(); };
+    overlay.onclick = function(e) { if (e.target === overlay) cleanup(); };
 
     overlay.querySelector('#crb-confirm-ok').onclick = function() {
+      if (options.validate) {
+        var validationError = options.validate(overlay);
+        if (validationError) {
+          var msgEl = overlay.querySelector('#crb-confirm-msg');
+          if (msgEl) {
+            msgEl.className = 'crb-message crb-message-error show';
+            msgEl.textContent = validationError;
+          }
+          return;
+        }
+      }
+
       var btn = overlay.querySelector('#crb-confirm-ok');
       btn.disabled = true;
       btn.textContent = 'Saving...';
 
       try {
-        var result = options.onConfirm();
+        var result = options.onConfirm(overlay);
       } catch (syncErr) {
         btn.disabled = false;
         btn.textContent = options.confirmLabel || 'Confirm';
@@ -595,7 +674,7 @@
       }
       if (result && typeof result.then === 'function') {
         result.then(function() {
-          overlay.remove();
+          cleanup();
         }).catch(function(e) {
           btn.disabled = false;
           btn.textContent = options.confirmLabel || 'Confirm';
@@ -731,14 +810,15 @@
         : '[' + category + ']';
       var outcomeVal = 'Flagged for ' + assignee;
 
-      // Chain: save record FIRST, then create task
-      saveWithAudit(recordId, record, {
-        review_status: { value: 'Needs Analyst Review' },
-        escalated_to: { value: assignee },
-        review_outcome: { value: outcomeVal }
-      }, 'Escalated to ' + assignee, loginUser, fullNotes)
+      // Create task first — if it fails, the review record is untouched.
+      // If record update then fails, the duplicate check prevents re-creation on retry.
+      createApp57Task(record, recordId, assignee, loginUser, fullNotes, category)
         .then(function() {
-          return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
+          return saveWithAudit(recordId, record, {
+            review_status: { value: 'Needs Analyst Review' },
+            escalated_to: { value: assignee },
+            review_outcome: { value: outcomeVal }
+          }, 'Escalated to ' + assignee, loginUser, fullNotes);
         })
         .then(function() {
           showMsg(overlay, '\u2713 Sent to ' + assignee + ' - task created!', 'success');
@@ -937,7 +1017,27 @@
     return false;
   }
 
-  function createApp57Task(record, recordId, assignee, reviewer, notes) {
+  function closeApp57Task(sourceApp, recordId) {
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: APP_57,
+      query: 'Source_App in ("' + sourceApp + '") and Source_Record_ID = "' + recordId + '" and status not in ("Complete","Canceled") limit 1',
+      fields: ['$id']
+    }).then(function(resp) {
+      if (resp.records.length === 0) return;
+      return kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+        app: APP_57,
+        id: resp.records[0].$id.value,
+        record: {
+          status: { value: 'Complete' },
+          Percent_Complete: { value: '100' }
+        }
+      });
+    }).catch(function() {
+      // Non-critical: task stays open if this fails
+    });
+  }
+
+  function createApp57Task(record, recordId, assignee, reviewer, notes, category) {
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
     var tier = record.tier ? record.tier.value : '';
@@ -970,19 +1070,24 @@
       }
 
       var generalNotes = record.general_notes ? record.general_notes.value : '';
-      var description = '<div>Tier Review escalated to ' + assignee + '<br>'
-        + companyName + ' (DARB #' + darbId + ') - Tier ' + tier + '<br>'
-        + (flaggedFields.length > 0 ? 'Flagged: ' + flaggedFields.join(' | ') + '<br>' : '')
-        + 'Reviewer: ' + reviewer + '<br>'
-        + 'Notes: ' + notes
-        + (generalNotes ? '<br>General Notes: ' + generalNotes : '')
+      var flagSummary = flaggedFields.length > 0
+        ? 'Flagged: ' + flaggedFields.map(function(f) { return esc(f); }).join(' | ') + '<br>'
+        : '';
+      var description = '<div>Tier Review escalated to ' + esc(assignee) + '<br>'
+        + esc(companyName) + ' (DARB #' + esc(darbId) + ') - Tier ' + esc(tier) + '<br>'
+        + flagSummary
+        + 'Reviewer: ' + esc(reviewer) + '<br>'
+        + 'Notes: ' + esc(notes)
+        + (generalNotes ? '<br>General Notes: ' + esc(generalNotes) : '')
         + '</div>';
+
+      var taskType = (category && CATEGORY_TO_TASK_TYPE[category]) || 'Database Maintenance';
 
       return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
         app: APP_57,
         record: {
           Project_Name: { value: 'Tier: ' + companyName },
-          Project_Field: { value: 'Database Maintenance' },
+          Project_Field: { value: taskType },
           Task_Assignee: { value: [{ code: assignTo }] },
           Source_Record_ID: { value: String(recordId) },
           Source_App: { value: 'Tier Review (101)' },

@@ -294,19 +294,27 @@
   function addRecordLinkButton(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
-    
+
     const link = getFieldValue(record, CONFIG.FIELDS.RECORD_LINK);
     if (!link) return;
-    
+
+    const sourceApp = getFieldValue(record, CONFIG.FIELDS.SOURCE_APP);
+    let linkLabel = 'Open in DARB Database';
+    if (sourceApp.indexOf('Tier') > -1 || sourceApp.indexOf('101') > -1) {
+      linkLabel = 'Open in Tier Review';
+    } else if (sourceApp.indexOf('Ops') > -1 || sourceApp.indexOf('102') > -1) {
+      linkLabel = 'Open in Ops Review';
+    }
+
     const container = document.createElement('div');
     container.style.marginTop = '12px';
-    
+
     const linkBtn = document.createElement('a');
     linkBtn.className = 'crb-link-btn';
     linkBtn.href = link;
     linkBtn.target = '_blank';
-    linkBtn.innerHTML = '🔗 Open in DARB Database';
-    
+    linkBtn.textContent = '🔗 ' + linkLabel;
+
     container.appendChild(linkBtn);
     space.appendChild(container);
   }
@@ -331,14 +339,23 @@
       startBtn.onclick = () => updateStatus(CONFIG.STATUS.IN_PROGRESS);
       container.appendChild(startBtn);
     }
-    
+
+    // Resume button (if on hold)
+    if (status === CONFIG.STATUS.ON_HOLD) {
+      const resumeBtn = document.createElement('button');
+      resumeBtn.className = 'crb-action-btn crb-btn-start';
+      resumeBtn.innerHTML = '▶️ Resume Task';
+      resumeBtn.onclick = () => updateStatus(CONFIG.STATUS.IN_PROGRESS);
+      container.appendChild(resumeBtn);
+    }
+
     // Complete button
     const completeBtn = document.createElement('button');
     completeBtn.className = 'crb-action-btn crb-btn-complete';
     completeBtn.innerHTML = '✓ Mark Complete';
     completeBtn.onclick = () => updateStatus(CONFIG.STATUS.COMPLETE);
     container.appendChild(completeBtn);
-    
+
     // Hold button (if in progress)
     if (status === CONFIG.STATUS.IN_PROGRESS) {
       const holdBtn = document.createElement('button');

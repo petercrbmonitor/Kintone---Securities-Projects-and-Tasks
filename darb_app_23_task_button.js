@@ -437,6 +437,11 @@
     return window.location.href;
   }
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   function getFieldValue(record, fieldCode, defaultVal) {
     if (defaultVal === undefined) defaultVal = '';
     if (!record || !record[fieldCode]) return defaultVal;
@@ -850,7 +855,7 @@
       body.record[fields.DUE_DATE] = { value: taskData.dueDate };
     }
     if (fields.NOTES && taskData.notes) {
-      body.record[fields.NOTES] = { value: '<div>' + taskData.notes + '</div>' };
+      body.record[fields.NOTES] = { value: '<div>' + escapeHtml(taskData.notes) + '</div>' };
     }
     if (fields.SCOPE) {
       body.record[fields.SCOPE] = { value: taskData.scope };
