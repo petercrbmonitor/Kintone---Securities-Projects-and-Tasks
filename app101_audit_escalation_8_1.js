@@ -1,5 +1,8 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.5 - Fixed: revert sets review_outcome to default (not empty) to avoid
+ *         radio button validation errors, removed type property from
+ *         saveWithAudit subtable values (Kintone infers from schema)
  * v8.4 - Fixed: fallback analyst caching, ESC listener leak, XSS in task
  *         descriptions, missing review_outcome on Research Complete
  *         Added: resolution_type tracking (auto on Complete, dropdown on
@@ -504,7 +507,7 @@
           onConfirm: function() {
             var revertUpdates = {
               review_status: { value: 'Pending' },
-              review_outcome: { value: '' },
+              review_outcome: { value: 'No Changes Needed' },
               escalated_to: { value: '' },
               resolution_type: { value: '' },
               confirmation_date: { value: null }
@@ -993,10 +996,10 @@
     }) : [];
     auditLog.push({
       value: {
-        audit_action: { type: 'SINGLE_LINE_TEXT', value: action },
-        audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-        audit_timestamp: { type: 'DATETIME', value: isoTimestamp() },
-        audit_notes: { type: 'SINGLE_LINE_TEXT', value: notes || '' }
+        audit_action: { value: action },
+        audit_user: { value: user },
+        audit_timestamp: { value: isoTimestamp() },
+        audit_notes: { value: notes || '' }
       }
     });
     updates.audit_log = { value: auditLog };

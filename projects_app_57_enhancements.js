@@ -474,7 +474,7 @@
     
     // Set default status
     if (CONFIG.FIELDS.STATUS && record[CONFIG.FIELDS.STATUS]) {
-      if (!record[CONFIG.FIELDS.STATUS].value || record[CONFIG.FIELDS.STATUS].value === 'Unprocessed') {
+      if (!record[CONFIG.FIELDS.STATUS].value) {
         record[CONFIG.FIELDS.STATUS].value = CONFIG.STATUS.NOT_STARTED;
       }
     }

@@ -1,5 +1,9 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v7.7 - Fixed: removed type property from saveWithAudit subtable values
+ *         Added: ANALYST_CONFIRM checkbox logic on Research Complete
+ *         (matching App 101 pattern), revert now clears confirmation_date
+ *         and analyst checkboxes
  * v7.6 - Fixed: fallback analyst caching (Tamara now resolves correctly),
  *         ESC listener leak in confirm modals, XSS in task descriptions
  *         Added: auto-close App 57 task on Research Complete,
@@ -37,6 +41,13 @@
     { name: 'Peter', email: 'peter@crbmonitor.com' },
     { name: 'Tamara', email: 'tamara.guy@crbmonitor.com' }
   ];
+
+  // Confirmation checkbox fields per analyst (Kintone field codes)
+  // Only analysts with dedicated checkbox fields need entries here
+  var ANALYST_CONFIRM = {
+    'Peter': 'confirmed_peter',
+    'Tamara': 'confirmed_peter_0'
+  };
 
   // Cached state
   var _isAnalyst = null;
@@ -459,7 +470,10 @@
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Pending' },
               review_outcome: { value: '' },
-              resolution_type: { value: '' }
+              resolution_type: { value: '' },
+              confirmation_date: { value: null },
+              confirmed_peter: { value: [] },
+              confirmed_peter_0: { value: [] }
             }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
               .then(function() {
                 location.reload();
@@ -495,12 +509,19 @@
           },
           onConfirm: function(overlay) {
             var resolution = overlay.querySelector('#crb-resolution-type').value;
-            return saveWithAudit(recordId, r, {
+            var updates = {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
+              confirmation_date: { value: todayStr() },
               review_outcome: { value: 'Analyst Reviewed' },
               resolution_type: { value: resolution }
-            }, 'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
+            };
+            var confirmField = ANALYST_CONFIRM[loginUser];
+            if (confirmField) {
+              updates[confirmField] = { value: ['Confirmed'] };
+            }
+            return saveWithAudit(recordId, r, updates,
+              'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
               .then(function() {
                 return closeApp57Task('Ops Review (102)', recordId);
               })
@@ -911,10 +932,10 @@
     }) : [];
     auditLog.push({
       value: {
-        audit_action: { type: 'SINGLE_LINE_TEXT', value: action },
-        audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-        audit_timestamp: { type: 'DATETIME', value: isoTimestamp() },
-        audit_notes: { type: 'SINGLE_LINE_TEXT', value: notes || '' }
+        audit_action: { value: action },
+        audit_user: { value: user },
+        audit_timestamp: { value: isoTimestamp() },
+        audit_notes: { value: notes || '' }
       }
     });
     updates.audit_log = { value: auditLog };
