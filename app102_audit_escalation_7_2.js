@@ -1,6 +1,7 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
- * v7.2 - Enhanced: confirmation modal, guided escalation, guidance banner,
+ * v7.3 - Fixed: dropdown caching bug, assignee validation, select appearance
+ *         Enhanced: confirmation modal, guided escalation, guidance banner,
  *         next-record navigation, readable timestamps
  *
  * Statuses: Pending -> Complete / Needs Analyst Review
@@ -27,7 +28,7 @@
   var _snapshot = {};
 
   function getAnalystMembers() {
-    if (_analystMembers) return Promise.resolve(_analystMembers);
+    if (_analystMembers !== null) return Promise.resolve(_analystMembers);
     return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
       code: ANALYST_GROUP
     }).then(function(resp) {
@@ -36,8 +37,8 @@
       });
       return _analystMembers;
     }).catch(function() {
-      _analystMembers = [];
-      return _analystMembers;
+      // Don't cache failures so next call retries the API
+      return [];
     });
   }
 
@@ -175,6 +176,11 @@
       background: #fff;\
       box-sizing: border-box;\
       transition: border-color 0.2s;\
+    }\
+    .crb-form-group select {\
+      -webkit-appearance: menulist;\
+      appearance: menulist;\
+      cursor: pointer;\
     }\
     .crb-form-group select:focus,\
     .crb-form-group textarea:focus {\
@@ -577,9 +583,15 @@
     getAnalystMembers().then(function(members) {
       var sel = overlay.querySelector('#crb-assignee');
       if (!sel) return;
-      sel.innerHTML = members.map(function(m) {
-        return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
-      }).join('');
+      var opts = '<option value="">-- Select analyst --</option>';
+      if (members.length === 0) {
+        opts = '<option value="">No analysts found</option>';
+      } else {
+        opts += members.map(function(m) {
+          return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
+        }).join('');
+      }
+      sel.innerHTML = opts;
     });
 
     // Close handlers
@@ -595,6 +607,10 @@
       var category = overlay.querySelector('#crb-category').value;
       var notes = overlay.querySelector('#crb-notes').value;
 
+      if (!assignee) {
+        showMsg(overlay, 'Please select an analyst to assign to.', 'error');
+        return;
+      }
       if (!category) {
         showMsg(overlay, 'Please select an issue category.', 'error');
         return;
