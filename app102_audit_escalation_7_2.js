@@ -27,6 +27,12 @@
   var ANALYST_GROUP = 'Research Admins';
   var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
 
+  // Fallback analyst list if group API fails (permissions, network, etc.)
+  var FALLBACK_ANALYSTS = [
+    { name: 'Peter', email: 'peter@crbmonitor.com' },
+    { name: 'Tamara', email: 'tamara@crbmonitor.com' }
+  ];
+
   // Cached state
   var _isAnalyst = null;
   var _analystMembers = null;
@@ -40,10 +46,13 @@
       _analystMembers = (resp.users || []).map(function(u) {
         return { name: u.name, email: u.code };
       });
+      if (_analystMembers.length === 0) {
+        _analystMembers = FALLBACK_ANALYSTS;
+      }
       return _analystMembers;
     }).catch(function() {
-      // Don't cache failures so next call retries the API
-      return [];
+      // Group API failed — use fallback so dropdown always works
+      return FALLBACK_ANALYSTS;
     });
   }
 
