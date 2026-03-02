@@ -36,7 +36,8 @@
       SOURCE_RECORD_ID: 'Source_Record_ID',
       PERCENT_COMPLETE: 'Percent_Complete',
       PROJECT_LEAD: 'project_manager',
-      COLLABORATORS: 'project_team_members_0'
+      COLLABORATORS: 'project_team_members_0',
+      HOURS_SPENT: 'hours_spent'             // Number field for time tracking
     },
     
     // Status options
