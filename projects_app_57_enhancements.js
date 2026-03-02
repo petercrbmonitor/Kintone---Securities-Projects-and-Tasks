@@ -1,9 +1,10 @@
 /**
  * CRB Monitor - Projects/Tasks App (App 57) Enhancements
- * 
+ * Version: 1.1 - Added reverse callback to update source app on task completion
+ *
  * Adds visual enhancements, status tracking, and notifications
  * for the task management system.
- * 
+ *
  * Installation:
  * 1. Go to App 57 Settings → Customization and Integration → JavaScript and CSS
  * 2. Upload this file
@@ -368,6 +369,48 @@
     space.appendChild(container);
   }
 
+  // Reverse callback - when a task completes in App 57, update the
+  // originating record in the source app to reflect completion
+  function closeSourceRecord() {
+    var currentRecord = kintone.app.record.get();
+    if (!currentRecord || !currentRecord.record) return;
+
+    var sourceApp = getFieldValue(currentRecord.record, CONFIG.FIELDS.SOURCE_APP);
+    var sourceRecordId = getFieldValue(currentRecord.record, CONFIG.FIELDS.SOURCE_RECORD_ID);
+
+    // Manual task with no source - nothing to update
+    if (!sourceApp || !sourceRecordId) return;
+
+    // Map Source_App dropdown value to numeric app ID
+    var sourceAppId;
+    if (sourceApp === 'Tier Review (101)') {
+      sourceAppId = 101;
+    } else if (sourceApp === 'Ops Review (102)') {
+      sourceAppId = 102;
+    } else if (sourceApp === 'DARB (23)') {
+      // App 23 does not have review_status - skip update
+      return;
+    } else {
+      return;
+    }
+
+    var todayStr = new Date().toISOString().split('T')[0];
+
+    // Update the source record - fire and forget
+    kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+      app: sourceAppId,
+      id: sourceRecordId,
+      record: {
+        review_status: { value: 'Complete' },
+        review_outcome: { value: 'Analyst Reviewed' },
+        review_date: { value: todayStr }
+      }
+    }).catch(function(error) {
+      console.log('closeSourceRecord - failed to update source app ' + sourceAppId +
+        ' record ' + sourceRecordId + ': ' + error.message);
+    });
+  }
+
   async function updateStatus(newStatus) {
     const recordId = kintone.app.record.getId();
     
@@ -388,7 +431,12 @@
     
     try {
       await kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', body);
-      
+
+      // If task is now complete, update the source app record (fire and forget)
+      if (newStatus === CONFIG.STATUS.COMPLETE) {
+        closeSourceRecord();
+      }
+
       if (typeof kintone.showNotification === 'function') {
         kintone.showNotification({
           text: `Status updated to: ${newStatus}`,
