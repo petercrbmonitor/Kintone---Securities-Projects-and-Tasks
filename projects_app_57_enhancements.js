@@ -1,5 +1,9 @@
 /**
  * CRB Monitor - Projects/Tasks App (App 57) Enhancements
+ * Version: 1.2 - Removed dead code: unused CONFIG properties (DARB_APP_ID,
+ *   COLORS, 8 FIELDS entries), dead CSS classes (.crb-status-badge variants,
+ *   .crb-overdue, .crb-due-soon, .crb-btn-open-link, .crb-assignee-tag),
+ *   fixed .crb-scope-single -> .crb-scope-single-record CSS class name
  * Version: 1.1 - Added reverse callback to update source app on task completion
  *
  * Adds visual enhancements, status tracking, and notifications
@@ -19,43 +23,24 @@
   // ============================================================
   
   const CONFIG = {
-    DARB_APP_ID: 23,
-    
     // Field codes in App 57 - matched to your actual field codes
     FIELDS: {
-      TASK_NAME: 'Project_Name',
-      TASK_TYPE: 'Project_Field',
-      ASSIGNEE: 'Task_Assignee',       // Assignee field
       STATUS: 'status',               // lowercase
       DUE_DATE: 'end_date',           // lowercase
-      START_DATE: 'start_date',       // lowercase
-      NOTES: 'project_description',   // lowercase
       SCOPE: 'Scope',                 // New dropdown field
       RECORD_LINK: 'Link',
       RECORD_COUNT: 'Record_Count',   // New number field
       SOURCE_APP: 'Source_App',       // Which app created this task
       SOURCE_RECORD_ID: 'Source_Record_ID',
-      PERCENT_COMPLETE: 'Percent_Complete',
-      PROJECT_LEAD: 'project_manager',
-      COLLABORATORS: 'project_team_members_0',
-      HOURS_SPENT: 'hours_spent'             // Number field for time tracking
+      PERCENT_COMPLETE: 'Percent_Complete'
     },
-    
+
     // Status options
     STATUS: {
       NOT_STARTED: 'Not started - Committed',
       IN_PROGRESS: 'Ongoing',
       COMPLETE: 'Complete',
       ON_HOLD: 'On Hold'
-    },
-    
-    // Colors for visual indicators
-    COLORS: {
-      HIGH_PRIORITY: '#ef4444',
-      OVERDUE: '#ef4444',
-      DUE_SOON: '#f59e0b',
-      IN_PROGRESS: '#3b82f6',
-      COMPLETE: '#22c55e'
     }
   };
 
@@ -64,20 +49,6 @@
   // ============================================================
   
   const STYLES = `
-    /* Status badges */
-    .crb-status-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    
-    .crb-status-not-started { background: #f1f5f9; color: #64748b; }
-    .crb-status-in-progress { background: #3b82f6; color: white; }
-    .crb-status-complete { background: #22c55e; color: white; }
-    .crb-status-on-hold { background: #f59e0b; color: white; }
-    
     /* Scope badges */
     .crb-scope-badge {
       display: inline-block;
@@ -88,7 +59,7 @@
       margin-left: 8px;
     }
     
-    .crb-scope-single { background: #e8f4f8; color: #2980b9; }
+    .crb-scope-single-record { background: #e8f4f8; color: #2980b9; }
     .crb-scope-batch { background: #fef3e2; color: #d68910; }
     .crb-scope-view { background: #f5e6ff; color: #8e44ad; }
 
@@ -106,16 +77,6 @@
     .crb-source-tier { background: #dbeafe; color: #1e40af; }
     .crb-source-ops { background: #d1fae5; color: #065f46; }
     .crb-source-default { background: #f1f5f9; color: #64748b; }
-    
-    /* Due date highlighting */
-    .crb-overdue {
-      color: #ef4444 !important;
-      font-weight: 600;
-    }
-
-    .crb-due-soon {
-      color: #f59e0b !important;
-    }
     
     /* Quick action buttons */
     .crb-quick-actions {
@@ -154,11 +115,6 @@
       color: white;
     }
     
-    .crb-btn-open-link {
-      background: #9b59b6;
-      color: white;
-    }
-    
     /* List view row highlighting */
     .crb-row-overdue {
       background-color: #fef2f2 !important;
@@ -194,16 +150,6 @@
       text-decoration: none;
     }
     
-    /* Assignee display */
-    .crb-assignee-tag {
-      display: inline-block;
-      padding: 4px 10px;
-      background: #ecf0f1;
-      border-radius: 4px;
-      font-size: 13px;
-      margin-right: 6px;
-      margin-bottom: 4px;
-    }
   `;
 
   // ============================================================

@@ -1,5 +1,8 @@
 /**
  * CRB Monitor - DARB App (App 23) Quick Task Assignment
+ * v1.1 - Removed dead code: unused CONFIG properties (DARB_FIELDS.RECORD_ID,
+ *         TICKER, SECURITY_TYPE, TASK_FIELDS.STATUS, DEFAULT_STATUS),
+ *         dead CSS classes (.crb-flag-btn-small, .crb-list-actions)
  *
  * Adds a "Flag for Review" / "Create Task" button to DARB records
  * that creates a task in App 57 (Projects/Tasks) with email notification.
@@ -26,10 +29,7 @@
 
     // Fields in App 23 (DARB) - matched to your field codes
     DARB_FIELDS: {
-      COMPANY_NAME: 'Text',               // Primary Business Name
-      RECORD_ID: '$id',                   // System field
-      TICKER: 'Ticker',                   // Optional
-      SECURITY_TYPE: 'Security_Type'      // Optional
+      COMPANY_NAME: 'Text'                // Primary Business Name
     },
 
     // Fields in App 57 (Tasks) - matched to your actual field codes
@@ -37,7 +37,6 @@
       TASK_NAME: 'Project_Name',          // Project Name field
       TASK_TYPE: 'Project_Field',         // Project Field dropdown
       ASSIGNEE: 'Task_Assignee',           // Assignee field
-      STATUS: 'status',                   // Dropdown (lowercase)
       DUE_DATE: 'end_date',               // End Date (lowercase)
       NOTES: 'project_description',       // Project Description (lowercase)
       SCOPE: 'Scope',                     // New: "Single Record" / "Batch" / "View"
@@ -80,7 +79,6 @@
     AUTHORIZED_GROUPS: ['Research', 'Research Admins'],
 
     // Default values
-    DEFAULT_STATUS: 'Not started - Committed',
     DEFAULT_DUE_DAYS: 7
   };
 
@@ -284,11 +282,6 @@
       box-shadow: 0 4px 12px rgba(20,184,166,0.4);
     }
 
-    .crb-flag-btn-small {
-      padding: 6px 12px;
-      font-size: 12px;
-    }
-
     /* Template groups */
     .crb-template-groups {
       margin-bottom: 16px;
@@ -403,10 +396,6 @@
       border: 1px solid #f5c6cb;
     }
 
-    /* List view button */
-    .crb-list-actions {
-      margin-bottom: 10px;
-    }
   `;
 
   // ============================================================

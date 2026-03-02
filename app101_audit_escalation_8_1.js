@@ -1,5 +1,7 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.8 - Removed dead code: unused per-analyst pending/escalated/flagged
+ *         counters and outcome variable in calculateStats
  * v8.7 - Fixed: gamification STATUS_COLORS and status breakdown aligned to
  *         actual app statuses (Pending/Needs Analyst Review/Complete),
  *         flagged counter now counts all 'Flagged for *' outcomes (not just Peter)
@@ -1171,28 +1173,19 @@
         name: analyst,
         total: 0,
         completed: 0,
-        pending: 0,
-        escalated: 0,
-        flagged: 0,
         completedDates: []
       };
     });
     records.forEach(function(record) {
       var reviewer = record.reviewer ? record.reviewer.value : '';
       var status = record.review_status ? record.review_status.value : '';
-      var outcome = record.review_outcome ? record.review_outcome.value : '';
       var reviewDate = record.review_date ? record.review_date.value : '';
       if (reviewer && stats[reviewer]) {
         stats[reviewer].total++;
         if (status === 'Complete') {
           stats[reviewer].completed++;
           if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
-        } else if (status === 'Needs Analyst Review') {
-          stats[reviewer].escalated++;
-        } else {
-          stats[reviewer].pending++;
         }
-        if (outcome && outcome.indexOf('Flagged for') === 0) stats[reviewer].flagged++;
       }
     });
     ANALYSTS.forEach(function(analyst) {

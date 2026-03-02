@@ -1,5 +1,8 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v8.0 - Removed dead code: unused per-reviewer stats counters
+ *         (inProgress/notStarted/needsReview/issuesFound), unused issuesTotal
+ *         variable, unused BADGES label properties in calculateGamifyStats
  * v7.9 - Fixed: revert now clears escalated_to, gamification status values
  *         aligned to action button statuses (Complete not Complete - No Issues),
  *         navigateToNextPending excludes legacy Complete variants,
@@ -1114,11 +1117,11 @@
   var ADMINS = ['Tamara', 'Peter'];
 
   var BADGES = {
-    10:  { icon: '🥉', label: '10 Reviews' },
-    25:  { icon: '🥈', label: '25 Reviews' },
-    50:  { icon: '🥇', label: '50 Reviews' },
-    100: { icon: '💎', label: '100 Reviews' },
-    250: { icon: '👑', label: '250 Reviews' }
+    10:  { icon: '🥉' },
+    25:  { icon: '🥈' },
+    50:  { icon: '🥇' },
+    100: { icon: '💎' },
+    250: { icon: '👑' }
   };
 
   var STATUS_COLORS = {
@@ -1190,10 +1193,6 @@
         name: name,
         total: 0,
         completed: 0,
-        inProgress: 0,
-        notStarted: 0,
-        needsReview: 0,
-        issuesFound: 0,
         eagleEyes: 0,
         completedDates: []
       };
@@ -1211,20 +1210,12 @@
       if (!matched) return;
       var status = record.review_status ? record.review_status.value : '';
       var reviewDate = record.review_date ? record.review_date.value : '';
-      var issuesTotal = parseInt(record.issues_found_total ? record.issues_found_total.value : '0') || 0;
       var qBadge = record.quality_badge ? record.quality_badge.value : '';
       stats[matched].total++;
       if (status === 'Complete') {
         stats[matched].completed++;
         if (reviewDate) stats[matched].completedDates.push(reviewDate);
-        stats[matched].issuesFound += issuesTotal;
         if (qBadge === 'Eagle Eye') stats[matched].eagleEyes++;
-      } else if (status === 'In Progress') {
-        stats[matched].inProgress++;
-      } else if (status === 'Not Started') {
-        stats[matched].notStarted++;
-      } else if (status === 'Needs Analyst Review') {
-        stats[matched].needsReview++;
       }
     });
     allNames.forEach(function(name) {
