@@ -1,6 +1,8 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
- * v7.3 - Fixed: dropdown caching bug, assignee validation, select appearance
+ * v7.4 - Added: review_outcome tracking for reporting (No Issues Found /
+ *         Flagged for [analyst] / Analyst Reviewed)
+ *         Fixed: dropdown caching bug, assignee validation, select appearance
  *         Enhanced: confirmation modal, guided escalation, guidance banner,
  *         next-record navigation, readable timestamps
  *
@@ -331,6 +333,7 @@
 
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
 
@@ -378,7 +381,8 @@
           onConfirm: function() {
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
-              review_date: { value: todayStr() }
+              review_date: { value: todayStr() },
+              review_outcome: { value: 'No Issues Found' }
             }, 'Status: Complete', loginUser, 'Review completed')
               .then(function() {
                 navigateToNextPending(recordId);
@@ -412,7 +416,8 @@
           confirmColor: '#f59e0b',
           onConfirm: function() {
             return saveWithAudit(recordId, r, {
-              review_status: { value: 'Pending' }
+              review_status: { value: 'Pending' },
+              review_outcome: { value: '' }
             }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
               .then(function() {
                 location.reload();
@@ -443,8 +448,9 @@
           onConfirm: function() {
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
-              review_date: { value: todayStr() }
-            }, 'Status: Complete', loginUser, 'Research review completed')
+              review_date: { value: todayStr() },
+              review_outcome: { value: 'Analyst Reviewed' }
+            }, 'Confirmed by ' + loginUser, loginUser, 'Research review completed')
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -624,10 +630,13 @@
         ? '[' + category + '] ' + notes
         : '[' + category + ']';
 
+      var outcomeVal = 'Flagged for ' + assignee;
+
       // Chain: save record FIRST, then create task
       saveWithAudit(recordId, record, {
         review_status: { value: 'Needs Analyst Review' },
-        escalated_to: { value: assignee }
+        escalated_to: { value: assignee },
+        review_outcome: { value: outcomeVal }
       }, 'Escalated to ' + assignee, loginUser, fullNotes)
         .then(function() {
           return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
@@ -695,6 +704,7 @@
 
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
 
     return event;
