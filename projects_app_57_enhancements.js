@@ -35,8 +35,8 @@
       SOURCE_APP: 'Source_App',       // Which app created this task
       SOURCE_RECORD_ID: 'Source_Record_ID',
       PERCENT_COMPLETE: 'Percent_Complete',
-      PROJECT_LEAD: 'Project_Lead',
-      COLLABORATORS: 'Collaborators'
+      PROJECT_LEAD: 'project_manager',
+      COLLABORATORS: 'project_team_members_0'
     },
     
     // Status options

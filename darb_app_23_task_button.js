@@ -45,7 +45,8 @@
       RECORD_COUNT: 'Record_Count',       // Number - ADD THIS
       SOURCE_RECORD_ID: 'Source_Record_ID', // Number - ADD THIS (optional)
       SOURCE_APP: 'Source_App',            // Tracks which app created the task
-      SAVED_IN: 'Saved_In'                // Saved In field - already exists
+      SAVED_IN_TABLE: 'Table',             // Subtable containing Saved In dropdown
+      SAVED_IN_DROPDOWN: 'Drop_down'       // Drop_down field inside Table subtable
     },
 
     // Task type options (consolidated list)
@@ -866,8 +867,14 @@
     if (fields.SOURCE_APP) {
       body.record[fields.SOURCE_APP] = { value: 'DARB (23)' };
     }
-    if (fields.SAVED_IN) {
-      body.record[fields.SAVED_IN] = { value: 'Kintone' };
+    if (fields.SAVED_IN_TABLE && fields.SAVED_IN_DROPDOWN) {
+      body.record[fields.SAVED_IN_TABLE] = {
+        value: [{
+          value: {
+            [fields.SAVED_IN_DROPDOWN]: { value: 'Kintone' }
+          }
+        }]
+      };
     }
 
     return kintone.api(
