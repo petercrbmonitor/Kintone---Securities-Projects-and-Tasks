@@ -25,7 +25,7 @@
   // Fallback analyst list if group API fails (permissions, network, etc.)
   var FALLBACK_ANALYSTS = [
     { name: 'Peter', email: 'peter@crbmonitor.com' },
-    { name: 'Tamara', email: 'tamara@crbmonitor.com' }
+    { name: 'Tamara', email: 'tamara.guy@crbmonitor.com' }
   ];
 
   // Confirmation checkbox fields per analyst (Kintone field codes)
