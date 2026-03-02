@@ -1,5 +1,8 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v7.8 - Merged App 23 link button, hidden gamification fields, and
+ *         gamification dashboard (leaderboard, checklist tracking, quality
+ *         badges, streaks, celebration, auto-compute) from standalone files
  * v7.7 - Fixed: removed type property from saveWithAudit subtable values
  *         Added: ANALYST_CONFIRM checkbox logic on Research Complete
  *         (matching App 101 pattern), revert now clears confirmation_date
@@ -22,7 +25,7 @@
  * Ops (Mel/Jaypee): Complete + Escalate buttons
  * Analyst (Peter/Tamara): Research Complete button
  * Escalation creates App 57 task (assign to + notes only)
- * Works alongside ops_review_app23_link.js and ops_review_gamify.js
+ * All features consolidated into this single file
  */
 
 (function() {
@@ -1031,5 +1034,475 @@
     d.setDate(d.getDate() + days);
     return d.toISOString().split('T')[0];
   }
+
+  // ============================================================
+  // APP 23 LINK + FORM CLEANUP
+  // ============================================================
+
+  var SUBDOMAIN = 'csl61zqur0t5';
+  var SOURCE_APP_ID = 23;
+
+  // Fields to hide from form (auto-computed, only visible in views)
+  var HIDDEN_FIELDS = [
+    'completion_score',
+    'checklist_progress',
+    'issues_found_total',
+    'quality_badge'
+  ];
+
+  function addApp23Link(event) {
+    var record = event.record;
+    var existing = document.getElementById('app23-link-btn');
+    if (existing) existing.remove();
+    var recordNum = record.darb_record ? record.darb_record.value : '';
+    if (!recordNum) return event;
+    var url = 'https://' + SUBDOMAIN + '.kintone.com/k/' + SOURCE_APP_ID + '/show#record=' + recordNum;
+    var btn = document.createElement('a');
+    btn.id = 'app23-link-btn';
+    btn.href = url;
+    btn.target = '_blank';
+    btn.style.cssText =
+      'display: inline-flex; align-items: center; gap: 6px;' +
+      'background: linear-gradient(135deg, #0f4c5c 0%, #1a6b7a 100%);' +
+      'color: white; padding: 8px 16px; border-radius: 6px;' +
+      'font-size: 13px; font-weight: 600; text-decoration: none;' +
+      'cursor: pointer; margin-right: 10px;';
+    btn.innerHTML = '📂 Open Record in App 23';
+    var headerSpace = kintone.app.record.getHeaderMenuSpaceElement();
+    if (headerSpace) headerSpace.insertBefore(btn, headerSpace.firstChild);
+    return event;
+  }
+
+  function hideComputedFields(event) {
+    HIDDEN_FIELDS.forEach(function(fieldCode) {
+      var el = kintone.app.record.getFieldElement(fieldCode);
+      if (el) el.style.display = 'none';
+    });
+    return event;
+  }
+
+  // App 23 link - record detail view
+  kintone.events.on('app.record.detail.show', function(event) {
+    addApp23Link(event);
+    hideComputedFields(event);
+    return event;
+  });
+
+  // App 23 link - record edit view
+  kintone.events.on('app.record.edit.show', function(event) {
+    addApp23Link(event);
+    hideComputedFields(event);
+    return event;
+  });
+
+  // App 23 link - record create view
+  kintone.events.on('app.record.create.show', function(event) {
+    hideComputedFields(event);
+    return event;
+  });
+
+  // ============================================================
+  // GAMIFICATION - Leaderboard, Badges, Streaks, Auto-compute
+  // ============================================================
+
+  var OPS_TEAM = ['Mel', 'Jaypee'];
+  var ADMINS = ['Tamara', 'Peter'];
+
+  var BADGES = {
+    10:  { icon: '🥉', label: '10 Reviews' },
+    25:  { icon: '🥈', label: '25 Reviews' },
+    50:  { icon: '🥇', label: '50 Reviews' },
+    100: { icon: '💎', label: '100 Reviews' },
+    250: { icon: '👑', label: '250 Reviews' }
+  };
+
+  var STATUS_COLORS = {
+    'Not Started':              '#f3f4f6',
+    'In Progress':              '#dbeafe',
+    'Needs Analyst Review':     '#fef3c7',
+    'Complete - No Issues':     '#d1fae5',
+    'Complete - Changes Needed': '#fce7f3'
+  };
+
+  function computeGamification(event) {
+    var record = event.record;
+    // Checklist progress (0-4)
+    var progress = 0;
+    if (record.name_verified && record.name_verified.value.indexOf('Yes') >= 0) progress++;
+    if (record.tickers_verified && record.tickers_verified.value.indexOf('Yes') >= 0) progress++;
+    if (record.links_checked && record.links_checked.value.indexOf('Yes') >= 0) progress++;
+    if (record.identifiers_verified && record.identifiers_verified.value.indexOf('Yes') >= 0) progress++;
+    record.checklist_progress.value = progress;
+    // Issues found total
+    var issues = 0;
+    var nameDisc = record.name_discrepancy ? record.name_discrepancy.value : '';
+    if (nameDisc && nameDisc !== 'None') issues++;
+    var tickerIss = record.ticker_issue ? record.ticker_issue.value : '';
+    if (tickerIss && tickerIss !== 'None') issues++;
+    var deadLinks = parseInt(record.dead_links_found ? record.dead_links_found.value : '0') || 0;
+    if (deadLinks > 0) issues++;
+    var idIssue = record.identifier_issue ? record.identifier_issue.value : '';
+    if (idIssue) issues++;
+    record.issues_found_total.value = issues;
+    // Completion score
+    var status = record.review_status ? record.review_status.value : '';
+    var score = 0;
+    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') score = 100;
+    else if (status === 'Needs Analyst Review') score = 75;
+    else if (status === 'In Progress') score = 25;
+    record.completion_score.value = score;
+    // Quality badge
+    var badge = '--';
+    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+      if (issues >= 3) badge = 'Eagle Eye';
+      else if (issues >= 1) badge = 'Sharp';
+      else badge = 'Clean';
+    }
+    record.quality_badge.value = badge;
+    return event;
+  }
+
+  async function fetchAllRecords() {
+    var allRecords = [];
+    var offset = 0;
+    var limit = 500;
+    while (true) {
+      var response = await kintone.api('/k/v1/records', 'GET', {
+        app: kintone.app.getId(),
+        query: 'limit ' + limit + ' offset ' + offset
+      });
+      allRecords = allRecords.concat(response.records);
+      if (response.records.length < limit) break;
+      offset += limit;
+    }
+    return allRecords;
+  }
+
+  function calculateGamifyStats(records) {
+    var allNames = OPS_TEAM.concat(ADMINS);
+    var stats = {};
+    allNames.forEach(function(name) {
+      stats[name] = {
+        name: name,
+        total: 0,
+        completed: 0,
+        inProgress: 0,
+        notStarted: 0,
+        needsReview: 0,
+        issuesFound: 0,
+        eagleEyes: 0,
+        completedDates: []
+      };
+    });
+    records.forEach(function(record) {
+      var reviewerArr = record.reviewer ? record.reviewer.value : [];
+      if (!reviewerArr || reviewerArr.length === 0) return;
+      var reviewerName = reviewerArr[0].name || '';
+      var matched = null;
+      allNames.forEach(function(name) {
+        if (reviewerName.toLowerCase().indexOf(name.toLowerCase()) >= 0) {
+          matched = name;
+        }
+      });
+      if (!matched) return;
+      var status = record.review_status ? record.review_status.value : '';
+      var reviewDate = record.review_date ? record.review_date.value : '';
+      var issuesTotal = parseInt(record.issues_found_total ? record.issues_found_total.value : '0') || 0;
+      var qBadge = record.quality_badge ? record.quality_badge.value : '';
+      stats[matched].total++;
+      if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+        stats[matched].completed++;
+        if (reviewDate) stats[matched].completedDates.push(reviewDate);
+        stats[matched].issuesFound += issuesTotal;
+        if (qBadge === 'Eagle Eye') stats[matched].eagleEyes++;
+      } else if (status === 'In Progress') {
+        stats[matched].inProgress++;
+      } else if (status === 'Not Started') {
+        stats[matched].notStarted++;
+      } else if (status === 'Needs Analyst Review') {
+        stats[matched].needsReview++;
+      }
+    });
+    allNames.forEach(function(name) {
+      stats[name].streak = calculateGamifyStreak(stats[name].completedDates);
+      stats[name].milestoneBadge = getMilestoneBadge(stats[name].completed);
+    });
+    return stats;
+  }
+
+  function calculateGamifyStreak(dates) {
+    if (dates.length === 0) return 0;
+    var sortedDates = dates
+      .map(function(d) { return new Date(d); })
+      .sort(function(a, b) { return b - a; });
+    var streak = 0;
+    var currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+    for (var i = 0; i < sortedDates.length; i++) {
+      var reviewDate = new Date(sortedDates[i]);
+      reviewDate.setHours(0, 0, 0, 0);
+      var diffDays = Math.floor((currentDate - reviewDate) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 1) {
+        streak++;
+        currentDate = reviewDate;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  function getMilestoneBadge(completed) {
+    var badge = null;
+    var thresholds = Object.keys(BADGES).map(Number).sort(function(a, b) { return b - a; });
+    for (var i = 0; i < thresholds.length; i++) {
+      if (completed >= thresholds[i]) {
+        badge = BADGES[thresholds[i]];
+        break;
+      }
+    }
+    return badge;
+  }
+
+  function buildGamificationPanel(stats, allRecords) {
+    var container = document.createElement('div');
+    container.id = 'gamification-container';
+    container.style.cssText =
+      'display: flex; gap: 20px; padding: 15px;' +
+      'background: linear-gradient(135deg, #0f4c5c 0%, #1a6b7a 100%);' +
+      'border-radius: 10px; margin: 10px 0; flex-wrap: wrap;';
+
+    var totalAssigned = allRecords.length;
+    var totalCompleted = allRecords.filter(function(r) {
+      var s = r.review_status ? r.review_status.value : '';
+      return s === 'Complete - No Issues' || s === 'Complete - Changes Needed';
+    }).length;
+    var completionRate = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
+    var totalIssues = 0;
+    allRecords.forEach(function(r) {
+      totalIssues += parseInt(r.issues_found_total ? r.issues_found_total.value : '0') || 0;
+    });
+
+    // Overall progress card
+    var overallCard = document.createElement('div');
+    overallCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 200px; color: white;';
+    overallCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📊 Overall Progress</h3>' +
+      '<div style="font-size: 28px; font-weight: bold; color: #4ade80;">' + completionRate + '%</div>' +
+      '<div style="font-size: 12px; color: #888;">' + totalCompleted + ' / ' + totalAssigned + ' reviews</div>' +
+      '<div style="background: #333; border-radius: 4px; height: 8px; margin-top: 10px; overflow: hidden;">' +
+      '<div style="background: linear-gradient(90deg, #4ade80, #22c55e); height: 100%; width: ' + completionRate + '%; transition: width 0.5s;"></div>' +
+      '</div>' +
+      '<div style="font-size: 12px; color: #fbbf24; margin-top: 8px;">🎯 ' + totalIssues + ' issues caught</div>';
+    container.appendChild(overallCard);
+
+    // Leaderboard card
+    var leaderboardCard = document.createElement('div');
+    leaderboardCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 350px; color: white; flex-grow: 1;';
+
+    var sortedAnalysts = Object.values(stats)
+      .filter(function(s) { return s.total > 0; })
+      .sort(function(a, b) { return b.completed - a.completed; });
+
+    var html = '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">🏆 Leaderboard</h3>';
+    if (sortedAnalysts.length === 0) {
+      html += '<div style="color: #666;">No reviews assigned yet</div>';
+    } else {
+      html += '<table style="width: 100%; font-size: 13px; border-collapse: collapse;">';
+      html += '<tr style="color: #888; text-align: left;">' +
+        '<th style="padding: 5px 8px 5px 0;"></th>' +
+        '<th style="padding: 5px 8px;">Reviewer</th>' +
+        '<th style="padding: 5px 8px;">Done</th>' +
+        '<th style="padding: 5px 8px;">Progress</th>' +
+        '<th style="padding: 5px 8px;">Streak</th>' +
+        '<th style="padding: 5px 8px;">🦅</th></tr>';
+
+      sortedAnalysts.forEach(function(analyst, index) {
+        var progress = analyst.total > 0 ? Math.round((analyst.completed / analyst.total) * 100) : 0;
+        var medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+        var mb = analyst.milestoneBadge ? analyst.milestoneBadge.icon : '';
+        var streak = analyst.streak > 0 ? '🔥' + analyst.streak : '-';
+        var barColor = progress === 100 ? '#4ade80' : progress >= 50 ? '#3b82f6' : '#f59e0b';
+        html += '<tr style="border-top: 1px solid rgba(255,255,255,0.1);">' +
+          '<td style="padding: 8px 8px 8px 0; font-size: 16px;">' + medal + '</td>' +
+          '<td style="padding: 8px 8px;">' + analyst.name + ' ' + mb + '</td>' +
+          '<td style="padding: 8px 8px;">' + analyst.completed + '/' + analyst.total + '</td>' +
+          '<td style="padding: 8px 8px; min-width: 100px;">' +
+          '<div style="background: #333; border-radius: 4px; height: 6px; overflow: hidden;">' +
+          '<div style="background: ' + barColor + '; height: 100%; width: ' + progress + '%;"></div>' +
+          '</div></td>' +
+          '<td style="padding: 8px 8px;">' + streak + '</td>' +
+          '<td style="padding: 8px 8px;">' + analyst.eagleEyes + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    leaderboardCard.innerHTML = html;
+    container.appendChild(leaderboardCard);
+
+    // Status card
+    var statusCard = document.createElement('div');
+    statusCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 160px; color: white;';
+    var notStarted = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Not Started'; }).length;
+    var inProg = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'In Progress'; }).length;
+    var needsReview = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Needs Analyst Review'; }).length;
+    var completeClean = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Complete - No Issues'; }).length;
+    var completeChanges = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Complete - Changes Needed'; }).length;
+    statusCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📋 Status</h3>' +
+      '<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">⏳ Not Started</span><span style="font-weight: bold;">' + notStarted + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #60a5fa;">🔄 In Progress</span><span style="font-weight: bold;">' + inProg + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">⚠️ Escalated</span><span style="font-weight: bold;">' + needsReview + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Clean</span><span style="font-weight: bold;">' + completeClean + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #f472b6;">📝 Changes</span><span style="font-weight: bold;">' + completeChanges + '</span></div>' +
+      '</div>';
+    container.appendChild(statusCard);
+
+    return container;
+  }
+
+  function colorCodeRows() {
+    setTimeout(function() {
+      var rows = document.querySelectorAll('.recordlist-row-gaia');
+      rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        cells.forEach(function(cell) {
+          var text = cell.textContent ? cell.textContent.trim() : '';
+          if (STATUS_COLORS[text]) {
+            row.style.backgroundColor = STATUS_COLORS[text];
+          }
+        });
+      });
+    }, 500);
+  }
+
+  function addRecordHeader(event) {
+    var record = event.record;
+    var existing = document.getElementById('ops-record-header');
+    if (existing) existing.remove();
+    var nameOk = (record.name_verified && record.name_verified.value.indexOf('Yes') >= 0);
+    var tickersOk = (record.tickers_verified && record.tickers_verified.value.indexOf('Yes') >= 0);
+    var linksOk = (record.links_checked && record.links_checked.value.indexOf('Yes') >= 0);
+    var idsOk = (record.identifiers_verified && record.identifiers_verified.value.indexOf('Yes') >= 0);
+    var done = (nameOk ? 1 : 0) + (tickersOk ? 1 : 0) + (linksOk ? 1 : 0) + (idsOk ? 1 : 0);
+    var companyName = record.company_name ? record.company_name.value : 'Record';
+    var badgeVal = record.quality_badge ? record.quality_badge.value : '--';
+    function ci(ok) { return ok ? '✅' : '⬜'; }
+    var badgeHTML = '';
+    var qb = { 'Eagle Eye': { i: '🦅', c: '#fef3c7', t: '#92400e', b: '#f59e0b' },
+                'Sharp': { i: '🔍', c: '#dbeafe', t: '#1e40af', b: '#3b82f6' },
+                'Clean': { i: '✨', c: '#d1fae5', t: '#065f46', b: '#10b981' } };
+    if (qb[badgeVal]) {
+      var bv = qb[badgeVal];
+      badgeHTML = '<span style="background:' + bv.c + ';color:' + bv.t + ';border:1px solid ' + bv.b +
+        ';padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + bv.i + ' ' + badgeVal + '</span>';
+    }
+    var header = document.createElement('div');
+    header.id = 'ops-record-header';
+    header.style.cssText =
+      'background: linear-gradient(135deg, #0f4c5c 0%, #1a6b7a 100%);' +
+      'color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 12px;' +
+      'display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;';
+    header.innerHTML =
+      '<div style="display:flex;align-items:center;gap:16px;">' +
+      '<span style="font-size:16px;font-weight:600;">' + companyName + '</span>' +
+      '<span style="font-size:13px;opacity:0.8;">Progress: ' + done + '/4</span>' +
+      badgeHTML + '</div>' +
+      '<div style="display:flex;gap:16px;font-size:13px;">' +
+      '<span style="' + (nameOk ? 'opacity:1' : 'opacity:0.5') + ';">' + ci(nameOk) + ' Name</span>' +
+      '<span style="' + (tickersOk ? 'opacity:1' : 'opacity:0.5') + ';">' + ci(tickersOk) + ' Tickers</span>' +
+      '<span style="' + (linksOk ? 'opacity:1' : 'opacity:0.5') + ';">' + ci(linksOk) + ' Links</span>' +
+      '<span style="' + (idsOk ? 'opacity:1' : 'opacity:0.5') + ';">' + ci(idsOk) + ' IDs</span>' +
+      '</div>';
+    var headerSpace = kintone.app.record.getHeaderMenuSpaceElement();
+    if (headerSpace) headerSpace.appendChild(header);
+    return event;
+  }
+
+  function showCelebration(issuesFound) {
+    var message = issuesFound >= 3 ? '🦅 Eagle Eye! 3+ Issues Caught! 🦅' :
+                  issuesFound >= 1 ? '🔍 Sharp Eye! Issue Caught! 🔍' :
+                  '✨ Clean Review! ✨';
+    var celebration = document.createElement('div');
+    celebration.style.cssText =
+      'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);' +
+      'background: linear-gradient(135deg, #0f4c5c 0%, #1a6b7a 100%);' +
+      'color: white; padding: 30px 50px; border-radius: 15px;' +
+      'font-size: 24px; font-weight: bold; z-index: 10000;' +
+      'box-shadow: 0 10px 40px rgba(0,0,0,0.3); animation: popIn 0.3s ease-out;';
+    celebration.textContent = message;
+    var animStyle = document.createElement('style');
+    animStyle.textContent =
+      '@keyframes popIn {' +
+      '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
+      '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
+    document.head.appendChild(animStyle);
+    document.body.appendChild(celebration);
+    setTimeout(function() {
+      celebration.style.transition = 'opacity 0.5s';
+      celebration.style.opacity = '0';
+      setTimeout(function() { celebration.remove(); }, 500);
+    }, 2500);
+  }
+
+  // Auto-compute gamification fields on save
+  kintone.events.on([
+    'app.record.create.submit',
+    'app.record.edit.submit'
+  ], computeGamification);
+
+  // Live preview on field changes
+  kintone.events.on([
+    'app.record.create.change.name_verified',
+    'app.record.create.change.tickers_verified',
+    'app.record.create.change.links_checked',
+    'app.record.create.change.identifiers_verified',
+    'app.record.create.change.name_discrepancy',
+    'app.record.create.change.ticker_issue',
+    'app.record.create.change.dead_links_found',
+    'app.record.create.change.identifier_issue',
+    'app.record.create.change.review_status',
+    'app.record.edit.change.name_verified',
+    'app.record.edit.change.tickers_verified',
+    'app.record.edit.change.links_checked',
+    'app.record.edit.change.identifiers_verified',
+    'app.record.edit.change.name_discrepancy',
+    'app.record.edit.change.ticker_issue',
+    'app.record.edit.change.dead_links_found',
+    'app.record.edit.change.identifier_issue',
+    'app.record.edit.change.review_status'
+  ], computeGamification);
+
+  // Gamification - list view dashboard + color coding
+  kintone.events.on('app.record.index.show', async function(event) {
+    if (document.getElementById('gamification-container')) return event;
+    var allRecords = await fetchAllRecords();
+    var stats = calculateGamifyStats(allRecords);
+    var container = buildGamificationPanel(stats, allRecords);
+    var headerSpace = kintone.app.getHeaderSpaceElement();
+    if (headerSpace) headerSpace.appendChild(container);
+    colorCodeRows();
+    return event;
+  });
+
+  // Gamification - record detail checklist header
+  kintone.events.on('app.record.detail.show', addRecordHeader);
+
+  // Gamification - celebration on completion
+  kintone.events.on([
+    'app.record.create.submit.success',
+    'app.record.edit.submit.success'
+  ], function(event) {
+    var record = event.record;
+    var status = record.review_status ? record.review_status.value : '';
+    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+      var issues = parseInt(record.issues_found_total ? record.issues_found_total.value : '0') || 0;
+      showCelebration(issues);
+    }
+    return event;
+  });
 
 })();

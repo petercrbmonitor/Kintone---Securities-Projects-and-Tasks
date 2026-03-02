@@ -1,5 +1,7 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.6 - Merged gamification (leaderboard, badges, streaks, celebration,
+ *         color-coded rows) from standalone file into single deployment
  * v8.5 - Fixed: revert sets review_outcome to default (not empty) to avoid
  *         radio button validation errors, removed type property from
  *         saveWithAudit subtable values (Kintone infers from schema)
@@ -17,7 +19,7 @@
  * Junior (Tim/Isaac): Complete + Escalate buttons
  * Analyst (Peter/Tamara): Research Complete button
  * Escalation creates App 57 task (assign to + notes only)
- * Works alongside darb_review_gamification.js
+ * All features consolidated into this single file
  */
 
 (function() {
@@ -1122,5 +1124,280 @@
     d.setDate(d.getDate() + days);
     return d.toISOString().split('T')[0];
   }
+
+  // ============================================================
+  // GAMIFICATION - Leaderboard, Badges, Streaks
+  // ============================================================
+
+  const ANALYSTS = ['Peter', 'Tamara', 'Jim', 'Isaac', 'Tim', 'Anthony', 'Kyle'];
+
+  const BADGES = {
+    10: { icon: '🥉', label: '10 Reviews' },
+    25: { icon: '🥈', label: '25 Reviews' },
+    50: { icon: '🥇', label: '50 Reviews' },
+    100: { icon: '💎', label: '100 Reviews' },
+    250: { icon: '👑', label: '250 Reviews' }
+  };
+
+  const STATUS_COLORS = {
+    'Not Started': '#ffcccc',
+    'In Progress': '#fff3cd',
+    'Complete': '#d4edda',
+    'Blocked': '#e2e3e5'
+  };
+
+  async function fetchAllRecords() {
+    let allRecords = [];
+    let offset = 0;
+    const limit = 500;
+    while (true) {
+      const response = await kintone.api('/k/v1/records', 'GET', {
+        app: kintone.app.getId(),
+        query: 'limit ' + limit + ' offset ' + offset
+      });
+      allRecords = allRecords.concat(response.records);
+      if (response.records.length < limit) break;
+      offset += limit;
+    }
+    return allRecords;
+  }
+
+  function calculateStats(records) {
+    const stats = {};
+    ANALYSTS.forEach(function(analyst) {
+      stats[analyst] = {
+        name: analyst,
+        total: 0,
+        completed: 0,
+        inProgress: 0,
+        notStarted: 0,
+        flagged: 0,
+        completedDates: []
+      };
+    });
+    records.forEach(function(record) {
+      var reviewer = record.reviewer ? record.reviewer.value : '';
+      var status = record.review_status ? record.review_status.value : '';
+      var outcome = record.review_outcome ? record.review_outcome.value : '';
+      var reviewDate = record.review_date ? record.review_date.value : '';
+      if (reviewer && stats[reviewer]) {
+        stats[reviewer].total++;
+        if (status === 'Complete') {
+          stats[reviewer].completed++;
+          if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
+        } else if (status === 'In Progress') {
+          stats[reviewer].inProgress++;
+        } else if (status === 'Not Started') {
+          stats[reviewer].notStarted++;
+        }
+        if (outcome === 'Flagged for Peter') stats[reviewer].flagged++;
+      }
+    });
+    ANALYSTS.forEach(function(analyst) {
+      stats[analyst].streak = calculateGamifyStreak(stats[analyst].completedDates);
+      stats[analyst].badge = getBadge(stats[analyst].completed);
+    });
+    return stats;
+  }
+
+  function calculateGamifyStreak(dates) {
+    if (dates.length === 0) return 0;
+    var sortedDates = dates
+      .map(function(d) { return new Date(d); })
+      .sort(function(a, b) { return b - a; });
+    var streak = 0;
+    var currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+    for (var i = 0; i < sortedDates.length; i++) {
+      var reviewDate = new Date(sortedDates[i]);
+      reviewDate.setHours(0, 0, 0, 0);
+      var diffDays = Math.floor((currentDate - reviewDate) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 1) {
+        streak++;
+        currentDate = reviewDate;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  function getBadge(completed) {
+    var badge = null;
+    var thresholds = Object.keys(BADGES).map(Number).sort(function(a, b) { return b - a; });
+    for (var i = 0; i < thresholds.length; i++) {
+      if (completed >= thresholds[i]) {
+        badge = BADGES[thresholds[i]];
+        break;
+      }
+    }
+    return badge;
+  }
+
+  function buildGamificationPanel(stats, allRecords) {
+    var container = document.createElement('div');
+    container.id = 'gamification-container';
+    container.style.cssText =
+      'display: flex; gap: 20px; padding: 15px;' +
+      'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);' +
+      'border-radius: 10px; margin: 10px 0; flex-wrap: wrap;';
+
+    var totalAssigned = allRecords.length;
+    var totalCompleted = allRecords.filter(function(r) {
+      return r.review_status && r.review_status.value === 'Complete';
+    }).length;
+    var completionRate = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
+
+    // Overall progress card
+    var overallCard = document.createElement('div');
+    overallCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 200px; color: white;';
+    overallCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📊 Overall Progress</h3>' +
+      '<div style="font-size: 28px; font-weight: bold; color: #4ade80;">' + completionRate + '%</div>' +
+      '<div style="font-size: 12px; color: #888;">' + totalCompleted + ' / ' + totalAssigned + ' reviews</div>' +
+      '<div style="background: #333; border-radius: 4px; height: 8px; margin-top: 10px; overflow: hidden;">' +
+      '<div style="background: linear-gradient(90deg, #4ade80, #22c55e); height: 100%; width: ' + completionRate + '%; transition: width 0.5s;"></div>' +
+      '</div>';
+    container.appendChild(overallCard);
+
+    // Leaderboard card
+    var leaderboardCard = document.createElement('div');
+    leaderboardCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 300px; color: white; flex-grow: 1;';
+
+    var sortedAnalysts = Object.values(stats)
+      .filter(function(s) { return s.total > 0; })
+      .sort(function(a, b) { return b.completed - a.completed; });
+
+    var html = '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">🏆 Leaderboard</h3>';
+    if (sortedAnalysts.length === 0) {
+      html += '<div style="color: #666;">No reviews assigned yet</div>';
+    } else {
+      html += '<table style="width: 100%; font-size: 13px; border-collapse: collapse;">';
+      html += '<tr style="color: #888; text-align: left;">' +
+        '<th style="padding: 5px 10px 5px 0;"></th>' +
+        '<th style="padding: 5px 10px;">Analyst</th>' +
+        '<th style="padding: 5px 10px;">Done</th>' +
+        '<th style="padding: 5px 10px;">Progress</th>' +
+        '<th style="padding: 5px 10px;">Streak</th></tr>';
+
+      sortedAnalysts.forEach(function(analyst, index) {
+        var progress = analyst.total > 0 ? Math.round((analyst.completed / analyst.total) * 100) : 0;
+        var medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+        var badge = analyst.badge ? analyst.badge.icon : '';
+        var streak = analyst.streak > 0 ? '🔥' + analyst.streak : '-';
+        html +=
+          '<tr style="border-top: 1px solid rgba(255,255,255,0.1);">' +
+          '<td style="padding: 8px 10px 8px 0; font-size: 16px;">' + medal + '</td>' +
+          '<td style="padding: 8px 10px;">' + analyst.name + ' ' + badge + '</td>' +
+          '<td style="padding: 8px 10px;">' + analyst.completed + '/' + analyst.total + '</td>' +
+          '<td style="padding: 8px 10px; min-width: 100px;">' +
+          '<div style="background: #333; border-radius: 4px; height: 6px; overflow: hidden;">' +
+          '<div style="background: ' + (progress === 100 ? '#4ade80' : '#3b82f6') + '; height: 100%; width: ' + progress + '%;"></div>' +
+          '</div></td>' +
+          '<td style="padding: 8px 10px;">' + streak + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    leaderboardCard.innerHTML = html;
+    container.appendChild(leaderboardCard);
+
+    // Status breakdown card
+    var statusCard = document.createElement('div');
+    statusCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 150px; color: white;';
+    var notStarted = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Not Started'; }).length;
+    var inProg = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'In Progress'; }).length;
+    var blocked = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Blocked'; }).length;
+    statusCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📋 Status</h3>' +
+      '<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #f87171;">⏳ Not Started</span><span style="font-weight: bold;">' + notStarted + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">🔄 In Progress</span><span style="font-weight: bold;">' + inProg + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Complete</span><span style="font-weight: bold;">' + totalCompleted + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">🚫 Blocked</span><span style="font-weight: bold;">' + blocked + '</span></div>' +
+      '</div>';
+    container.appendChild(statusCard);
+
+    return container;
+  }
+
+  function colorCodeRows() {
+    setTimeout(function() {
+      var rows = document.querySelectorAll('.recordlist-row-gaia');
+      rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        cells.forEach(function(cell) {
+          var text = cell.textContent ? cell.textContent.trim() : '';
+          if (STATUS_COLORS[text]) {
+            row.style.backgroundColor = STATUS_COLORS[text];
+          }
+        });
+      });
+    }, 500);
+  }
+
+  function showCelebration() {
+    var celebration = document.createElement('div');
+    celebration.style.cssText =
+      'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);' +
+      'background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);' +
+      'color: white; padding: 30px 50px; border-radius: 15px;' +
+      'font-size: 24px; font-weight: bold; z-index: 10000;' +
+      'box-shadow: 0 10px 40px rgba(0,0,0,0.3); animation: popIn 0.3s ease-out;';
+    celebration.innerHTML = '🎉 Review Complete! 🎉';
+    var animStyle = document.createElement('style');
+    animStyle.textContent =
+      '@keyframes popIn {' +
+      '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
+      '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
+    document.head.appendChild(animStyle);
+    document.body.appendChild(celebration);
+    setTimeout(function() {
+      celebration.style.transition = 'opacity 0.5s';
+      celebration.style.opacity = '0';
+      setTimeout(function() { celebration.remove(); }, 500);
+    }, 2000);
+  }
+
+  // Gamification - list view dashboard
+  kintone.events.on('app.record.index.show', async function(event) {
+    if (document.getElementById('gamification-container')) return event;
+    var allRecords = await fetchAllRecords();
+    var stats = calculateStats(allRecords);
+    var container = buildGamificationPanel(stats, allRecords);
+    var headerSpace = kintone.app.getHeaderSpaceElement();
+    if (headerSpace) headerSpace.appendChild(container);
+    colorCodeRows();
+    return event;
+  });
+
+  // Gamification - reviewer badge on detail view
+  kintone.events.on('app.record.detail.show', function(event) {
+    var record = event.record;
+    var reviewer = record.reviewer ? record.reviewer.value : '';
+    if (!reviewer) return event;
+    var headerSpace = kintone.app.record.getHeaderMenuSpaceElement();
+    if (headerSpace && !document.getElementById('reviewer-badge')) {
+      var badgeDiv = document.createElement('div');
+      badgeDiv.id = 'reviewer-badge';
+      badgeDiv.style.cssText =
+        'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);' +
+        'color: white; padding: 8px 15px; border-radius: 20px;' +
+        'font-size: 13px; display: inline-block;';
+      badgeDiv.textContent = '👤 Reviewer: ' + reviewer;
+      headerSpace.appendChild(badgeDiv);
+    }
+    return event;
+  });
+
+  // Gamification - celebration on completion
+  kintone.events.on(['app.record.create.submit.success', 'app.record.edit.submit.success'], function(event) {
+    var record = event.record;
+    var status = record.review_status ? record.review_status.value : '';
+    if (status === 'Complete') showCelebration();
+    return event;
+  });
 
 })();
