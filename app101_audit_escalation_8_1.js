@@ -1,5 +1,8 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.7 - Fixed: gamification STATUS_COLORS and status breakdown aligned to
+ *         actual app statuses (Pending/Needs Analyst Review/Complete),
+ *         flagged counter now counts all 'Flagged for *' outcomes (not just Peter)
  * v8.6 - Merged gamification (leaderboard, badges, streaks, celebration,
  *         color-coded rows) from standalone file into single deployment
  * v8.5 - Fixed: revert sets review_outcome to default (not empty) to avoid
@@ -1140,10 +1143,9 @@
   };
 
   const STATUS_COLORS = {
-    'Not Started': '#ffcccc',
-    'In Progress': '#fff3cd',
-    'Complete': '#d4edda',
-    'Blocked': '#e2e3e5'
+    'Pending': '#f3f4f6',
+    'Needs Analyst Review': '#fef3c7',
+    'Complete': '#d4edda'
   };
 
   async function fetchAllRecords() {
@@ -1169,8 +1171,8 @@
         name: analyst,
         total: 0,
         completed: 0,
-        inProgress: 0,
-        notStarted: 0,
+        pending: 0,
+        escalated: 0,
         flagged: 0,
         completedDates: []
       };
@@ -1185,12 +1187,12 @@
         if (status === 'Complete') {
           stats[reviewer].completed++;
           if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
-        } else if (status === 'In Progress') {
-          stats[reviewer].inProgress++;
-        } else if (status === 'Not Started') {
-          stats[reviewer].notStarted++;
+        } else if (status === 'Needs Analyst Review') {
+          stats[reviewer].escalated++;
+        } else {
+          stats[reviewer].pending++;
         }
-        if (outcome === 'Flagged for Peter') stats[reviewer].flagged++;
+        if (outcome && outcome.indexOf('Flagged for') === 0) stats[reviewer].flagged++;
       }
     });
     ANALYSTS.forEach(function(analyst) {
@@ -1307,16 +1309,14 @@
     var statusCard = document.createElement('div');
     statusCard.style.cssText =
       'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 150px; color: white;';
-    var notStarted = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Not Started'; }).length;
-    var inProg = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'In Progress'; }).length;
-    var blocked = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Blocked'; }).length;
+    var pending = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Pending'; }).length;
+    var escalated = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Needs Analyst Review'; }).length;
     statusCard.innerHTML =
       '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📋 Status</h3>' +
       '<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #f87171;">⏳ Not Started</span><span style="font-weight: bold;">' + notStarted + '</span></div>' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">🔄 In Progress</span><span style="font-weight: bold;">' + inProg + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">⏳ Pending</span><span style="font-weight: bold;">' + pending + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">⚠️ Escalated</span><span style="font-weight: bold;">' + escalated + '</span></div>' +
       '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Complete</span><span style="font-weight: bold;">' + totalCompleted + '</span></div>' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">🚫 Blocked</span><span style="font-weight: bold;">' + blocked + '</span></div>' +
       '</div>';
     container.appendChild(statusCard);
 

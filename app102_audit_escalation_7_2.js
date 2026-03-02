@@ -1,5 +1,9 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v7.9 - Fixed: revert now clears escalated_to, gamification status values
+ *         aligned to action button statuses (Complete not Complete - No Issues),
+ *         navigateToNextPending excludes legacy Complete variants,
+ *         status breakdown uses actual app statuses (Pending/Complete)
  * v7.8 - Merged App 23 link button, hidden gamification fields, and
  *         gamification dashboard (leaderboard, checklist tracking, quality
  *         badges, streaks, celebration, auto-compute) from standalone files
@@ -473,6 +477,7 @@
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Pending' },
               review_outcome: { value: '' },
+              escalated_to: { value: '' },
               resolution_type: { value: '' },
               confirmation_date: { value: null },
               confirmed_peter: { value: [] },
@@ -904,7 +909,7 @@
   function navigateToNextPending(currentId) {
     return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
       app: APP_102,
-      query: 'review_status not in ("Complete","Needs Analyst Review") and $id != ' + currentId + ' order by $id asc limit 1',
+      query: 'review_status not in ("Complete","Complete - No Issues","Complete - Changes Needed","Needs Analyst Review") and $id != ' + currentId + ' order by $id asc limit 1',
       fields: ['$id']
     }).then(function(resp) {
       if (resp.records.length > 0) {
@@ -1117,11 +1122,10 @@
   };
 
   var STATUS_COLORS = {
-    'Not Started':              '#f3f4f6',
-    'In Progress':              '#dbeafe',
-    'Needs Analyst Review':     '#fef3c7',
-    'Complete - No Issues':     '#d1fae5',
-    'Complete - Changes Needed': '#fce7f3'
+    'Pending':              '#f3f4f6',
+    'In Progress':          '#dbeafe',
+    'Needs Analyst Review': '#fef3c7',
+    'Complete':             '#d1fae5'
   };
 
   function computeGamification(event) {
@@ -1147,13 +1151,13 @@
     // Completion score
     var status = record.review_status ? record.review_status.value : '';
     var score = 0;
-    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') score = 100;
+    if (status === 'Complete') score = 100;
     else if (status === 'Needs Analyst Review') score = 75;
     else if (status === 'In Progress') score = 25;
     record.completion_score.value = score;
     // Quality badge
     var badge = '--';
-    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+    if (status === 'Complete') {
       if (issues >= 3) badge = 'Eagle Eye';
       else if (issues >= 1) badge = 'Sharp';
       else badge = 'Clean';
@@ -1210,7 +1214,7 @@
       var issuesTotal = parseInt(record.issues_found_total ? record.issues_found_total.value : '0') || 0;
       var qBadge = record.quality_badge ? record.quality_badge.value : '';
       stats[matched].total++;
-      if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+      if (status === 'Complete') {
         stats[matched].completed++;
         if (reviewDate) stats[matched].completedDates.push(reviewDate);
         stats[matched].issuesFound += issuesTotal;
@@ -1275,7 +1279,7 @@
     var totalAssigned = allRecords.length;
     var totalCompleted = allRecords.filter(function(r) {
       var s = r.review_status ? r.review_status.value : '';
-      return s === 'Complete - No Issues' || s === 'Complete - Changes Needed';
+      return s === 'Complete';
     }).length;
     var completionRate = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
     var totalIssues = 0;
@@ -1345,19 +1349,16 @@
     var statusCard = document.createElement('div');
     statusCard.style.cssText =
       'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 160px; color: white;';
-    var notStarted = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Not Started'; }).length;
+    var pending = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Pending'; }).length;
     var inProg = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'In Progress'; }).length;
     var needsReview = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Needs Analyst Review'; }).length;
-    var completeClean = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Complete - No Issues'; }).length;
-    var completeChanges = allRecords.filter(function(r) { return (r.review_status ? r.review_status.value : '') === 'Complete - Changes Needed'; }).length;
     statusCard.innerHTML =
       '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📋 Status</h3>' +
       '<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">⏳ Not Started</span><span style="font-weight: bold;">' + notStarted + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">⏳ Pending</span><span style="font-weight: bold;">' + pending + '</span></div>' +
       '<div style="display: flex; justify-content: space-between;"><span style="color: #60a5fa;">🔄 In Progress</span><span style="font-weight: bold;">' + inProg + '</span></div>' +
       '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">⚠️ Escalated</span><span style="font-weight: bold;">' + needsReview + '</span></div>' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Clean</span><span style="font-weight: bold;">' + completeClean + '</span></div>' +
-      '<div style="display: flex; justify-content: space-between;"><span style="color: #f472b6;">📝 Changes</span><span style="font-weight: bold;">' + completeChanges + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Complete</span><span style="font-weight: bold;">' + totalCompleted + '</span></div>' +
       '</div>';
     container.appendChild(statusCard);
 
@@ -1498,7 +1499,7 @@
   ], function(event) {
     var record = event.record;
     var status = record.review_status ? record.review_status.value : '';
-    if (status === 'Complete - No Issues' || status === 'Complete - Changes Needed') {
+    if (status === 'Complete') {
       var issues = parseInt(record.issues_found_total ? record.issues_found_total.value : '0') || 0;
       showCelebration(issues);
     }
