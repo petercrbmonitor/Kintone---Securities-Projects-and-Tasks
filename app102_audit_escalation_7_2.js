@@ -1,6 +1,12 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
- * v7.2 - Enhanced: confirmation modal, guided escalation, guidance banner,
+ * v7.5 - Added: resolution_type tracking on Complete and Research Complete
+ *         for effectiveness reporting (No Changes Required / Data Corrected /
+ *         Information Added / Record Updated)
+ * v7.4 - Added: review_outcome tracking for reporting (No Issues Found /
+ *         Flagged for [analyst] / Analyst Reviewed)
+ *         Fixed: dropdown caching bug, assignee validation, select appearance
+ *         Enhanced: confirmation modal, guided escalation, guidance banner,
  *         next-record navigation, readable timestamps
  *
  * Statuses: Pending -> Complete / Needs Analyst Review
@@ -27,7 +33,7 @@
   var _snapshot = {};
 
   function getAnalystMembers() {
-    if (_analystMembers) return Promise.resolve(_analystMembers);
+    if (_analystMembers !== null) return Promise.resolve(_analystMembers);
     return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
       code: ANALYST_GROUP
     }).then(function(resp) {
@@ -36,8 +42,8 @@
       });
       return _analystMembers;
     }).catch(function() {
-      _analystMembers = [];
-      return _analystMembers;
+      // Don't cache failures so next call retries the API
+      return [];
     });
   }
 
@@ -64,6 +70,13 @@
     'Source Discrepancy',
     'Company Record Issue',
     'Needs Further Research'
+  ];
+
+  var RESOLUTION_TYPES = [
+    'No Changes Required',
+    'Data Corrected',
+    'Information Added',
+    'Record Updated'
   ];
 
   // ============================================================
@@ -175,6 +188,11 @@
       background: #fff;\
       box-sizing: border-box;\
       transition: border-color 0.2s;\
+    }\
+    .crb-form-group select {\
+      -webkit-appearance: menulist;\
+      appearance: menulist;\
+      cursor: pointer;\
     }\
     .crb-form-group select:focus,\
     .crb-form-group textarea:focus {\
@@ -325,6 +343,7 @@
 
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
 
@@ -361,19 +380,28 @@
       completeBtn.className = 'crb-action-btn crb-btn-complete';
       completeBtn.textContent = '\u2713 Complete';
       completeBtn.onclick = function() {
-        // Enhancement 1: Confirmation modal
+        // Enhancement 1: Confirmation modal with resolution tracking
         openConfirmModal({
           title: 'Confirm Complete',
           subtitle: companyName + ' (DARB #' + darbId + ')',
           headerColor: 'linear-gradient(135deg, #22c55e, #16a34a)',
-          outcomePreview: 'Review completed - no issues found',
+          outcomePreview: 'Review completed',
+          formHtml: buildResolutionDropdown('crb-resolution-type'),
           confirmLabel: '\u2713 Complete Review',
           confirmColor: '#22c55e',
-          onConfirm: function() {
+          validate: function(overlay) {
+            var val = overlay.querySelector('#crb-resolution-type').value;
+            if (!val) return 'Please select whether changes were made.';
+            return null;
+          },
+          onConfirm: function(overlay) {
+            var resolution = overlay.querySelector('#crb-resolution-type').value;
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
-              review_date: { value: todayStr() }
-            }, 'Status: Complete', loginUser, 'Review completed')
+              review_date: { value: todayStr() },
+              review_outcome: { value: 'No Issues Found' },
+              resolution_type: { value: resolution }
+            }, 'Status: Complete', loginUser, 'Resolution: ' + resolution)
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -406,7 +434,9 @@
           confirmColor: '#f59e0b',
           onConfirm: function() {
             return saveWithAudit(recordId, r, {
-              review_status: { value: 'Pending' }
+              review_status: { value: 'Pending' },
+              review_outcome: { value: '' },
+              resolution_type: { value: '' }
             }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
               .then(function() {
                 location.reload();
@@ -432,13 +462,22 @@
           subtitle: companyName + ' (DARB #' + darbId + ')',
           headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
           outcomePreview: 'Research review completed by ' + loginUser,
+          formHtml: buildResolutionDropdown('crb-resolution-type'),
           confirmLabel: 'Complete Research',
           confirmColor: '#6366f1',
-          onConfirm: function() {
+          validate: function(overlay) {
+            var val = overlay.querySelector('#crb-resolution-type').value;
+            if (!val) return 'Please select whether changes were made.';
+            return null;
+          },
+          onConfirm: function(overlay) {
+            var resolution = overlay.querySelector('#crb-resolution-type').value;
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
-              review_date: { value: todayStr() }
-            }, 'Status: Complete', loginUser, 'Research review completed')
+              review_date: { value: todayStr() },
+              review_outcome: { value: 'Analyst Reviewed' },
+              resolution_type: { value: resolution }
+            }, 'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -456,6 +495,28 @@
   // CONFIRMATION MODAL (Enhancement 1)
   // ============================================================
 
+  /**
+   * Build resolution type dropdown HTML for confirmation modals.
+   * @param {string} selectId - The id attribute for the <select> element
+   * @returns {string} HTML string
+   */
+  function buildResolutionDropdown(selectId) {
+    var opts = '<option value="">-- Select resolution --</option>';
+    for (var i = 0; i < RESOLUTION_TYPES.length; i++) {
+      opts += '<option value="' + RESOLUTION_TYPES[i] + '">' + RESOLUTION_TYPES[i] + '</option>';
+    }
+    return '\
+      <div class="crb-form-group" style="margin-top:12px;">\
+        <label style="font-weight:600;color:#334155;">Were changes made?</label>\
+        <select id="' + selectId + '" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">' + opts + '</select>\
+      </div>';
+  }
+
+  /**
+   * options.formHtml     - optional extra HTML to render in the modal body
+   * options.validate     - optional function(overlay) returning error string or null
+   * options.onConfirm    - function(overlay) called on confirm; receives overlay for reading form values
+   */
   function openConfirmModal(options) {
     var overlay = document.createElement('div');
     overlay.id = 'crb-confirm-modal';
@@ -464,6 +525,9 @@
     var detailsHtml = '<div id="crb-confirm-msg" class="crb-message"></div>';
     if (options.outcomePreview) {
       detailsHtml += '<div class="crb-confirm-detail"><strong>Action:</strong> ' + esc(options.outcomePreview) + '</div>';
+    }
+    if (options.formHtml) {
+      detailsHtml += options.formHtml;
     }
 
     var headerBg = options.headerColor || 'linear-gradient(135deg, #22c55e, #16a34a)';
@@ -493,12 +557,25 @@
     });
 
     overlay.querySelector('#crb-confirm-ok').onclick = function() {
+      // Run optional validation before confirming
+      if (options.validate) {
+        var validationError = options.validate(overlay);
+        if (validationError) {
+          var msgEl = overlay.querySelector('#crb-confirm-msg');
+          if (msgEl) {
+            msgEl.className = 'crb-message crb-message-error show';
+            msgEl.textContent = validationError;
+          }
+          return;
+        }
+      }
+
       var btn = overlay.querySelector('#crb-confirm-ok');
       btn.disabled = true;
       btn.textContent = 'Saving...';
 
       try {
-        var result = options.onConfirm();
+        var result = options.onConfirm(overlay);
       } catch (syncErr) {
         btn.disabled = false;
         btn.textContent = options.confirmLabel || 'Confirm';
@@ -577,9 +654,15 @@
     getAnalystMembers().then(function(members) {
       var sel = overlay.querySelector('#crb-assignee');
       if (!sel) return;
-      sel.innerHTML = members.map(function(m) {
-        return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
-      }).join('');
+      var opts = '<option value="">-- Select analyst --</option>';
+      if (members.length === 0) {
+        opts = '<option value="">No analysts found</option>';
+      } else {
+        opts += members.map(function(m) {
+          return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
+        }).join('');
+      }
+      sel.innerHTML = opts;
     });
 
     // Close handlers
@@ -595,6 +678,10 @@
       var category = overlay.querySelector('#crb-category').value;
       var notes = overlay.querySelector('#crb-notes').value;
 
+      if (!assignee) {
+        showMsg(overlay, 'Please select an analyst to assign to.', 'error');
+        return;
+      }
       if (!category) {
         showMsg(overlay, 'Please select an issue category.', 'error');
         return;
@@ -608,10 +695,13 @@
         ? '[' + category + '] ' + notes
         : '[' + category + ']';
 
+      var outcomeVal = 'Flagged for ' + assignee;
+
       // Chain: save record FIRST, then create task
       saveWithAudit(recordId, record, {
         review_status: { value: 'Needs Analyst Review' },
-        escalated_to: { value: assignee }
+        escalated_to: { value: assignee },
+        review_outcome: { value: outcomeVal }
       }, 'Escalated to ' + assignee, loginUser, fullNotes)
         .then(function() {
           return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
@@ -679,6 +769,7 @@
 
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
+    kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
 
     return event;

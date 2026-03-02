@@ -32,9 +32,12 @@
       SCOPE: 'Scope',                 // New dropdown field
       RECORD_LINK: 'Link',
       RECORD_COUNT: 'Record_Count',   // New number field
+      SOURCE_APP: 'Source_App',       // Which app created this task
+      SOURCE_RECORD_ID: 'Source_Record_ID',
       PERCENT_COMPLETE: 'Percent_Complete',
-      PROJECT_LEAD: 'Project_Lead',
-      COLLABORATORS: 'Collaborators'
+      PROJECT_LEAD: 'project_manager',
+      COLLABORATORS: 'project_team_members_0',
+      HOURS_SPENT: 'hours_spent'             // Number field for time tracking
     },
     
     // Status options
@@ -87,6 +90,21 @@
     .crb-scope-single { background: #e8f4f8; color: #2980b9; }
     .crb-scope-batch { background: #fef3e2; color: #d68910; }
     .crb-scope-view { background: #f5e6ff; color: #8e44ad; }
+
+    /* Source app badges */
+    .crb-source-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+
+    .crb-source-darb { background: #fef3c7; color: #92400e; }
+    .crb-source-tier { background: #dbeafe; color: #1e40af; }
+    .crb-source-ops { background: #d1fae5; color: #065f46; }
+    .crb-source-default { background: #f1f5f9; color: #64748b; }
     
     /* Due date highlighting */
     .crb-overdue {
@@ -249,6 +267,30 @@
     space.appendChild(badge);
   }
 
+  function addSourceAppBadge(record, spaceId) {
+    const space = kintone.app.record.getSpaceElement(spaceId);
+    if (!space) return;
+
+    const sourceApp = getFieldValue(record, CONFIG.FIELDS.SOURCE_APP);
+    if (!sourceApp) return;
+
+    const badge = document.createElement('span');
+    badge.className = 'crb-source-badge';
+
+    if (sourceApp.indexOf('DARB') > -1 || sourceApp.indexOf('23') > -1) {
+      badge.className += ' crb-source-darb';
+    } else if (sourceApp.indexOf('Tier') > -1 || sourceApp.indexOf('101') > -1) {
+      badge.className += ' crb-source-tier';
+    } else if (sourceApp.indexOf('Ops') > -1 || sourceApp.indexOf('102') > -1) {
+      badge.className += ' crb-source-ops';
+    } else {
+      badge.className += ' crb-source-default';
+    }
+
+    badge.textContent = sourceApp;
+    space.appendChild(badge);
+  }
+
   function addRecordLinkButton(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
@@ -390,6 +432,7 @@
     injectStyles();
     
     // Add visual enhancements (create these space elements in your form)
+    addSourceAppBadge(record, 'source_app_space');
     addScopeBadge(record, 'scope_badge_space');
     addRecordLinkButton(record, 'record_link_space');
     addQuickActions(record, 'quick_actions_space');
