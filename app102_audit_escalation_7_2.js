@@ -1,5 +1,7 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v8.2 - Replace navigateToNextPending with location.reload() so users
+ *         stay in their current filtered view after Complete/Escalate
  * v8.1 - Bug fixes: audit_log null guard, ESC listener leak in escalation
  *         modal, confirmation_date/review_date cleared on revert,
  *         fetchAllRecords guest-space URL, colorCodeRows on pagination,
@@ -451,7 +453,7 @@
               resolution_type: { value: resolution }
             }, 'Status: Complete', loginUser, 'Resolution: ' + resolution)
               .then(function() {
-                navigateToNextPending(recordId);
+                reloadAfterAction();
               });
           }
         });
@@ -542,7 +544,7 @@
                 return closeApp57Task('Ops Review (102)', recordId);
               })
               .then(function() {
-                navigateToNextPending(recordId);
+                reloadAfterAction();
               });
           }
         });
@@ -781,7 +783,7 @@
           showMsg(overlay, '\u2713 Sent to ' + assignee + ' - task created!', 'success');
           setTimeout(function() {
             closeModal();
-            navigateToNextPending(recordId);
+            reloadAfterAction();
           }, 1200);
         })
         .catch(function(e) {
@@ -917,33 +919,12 @@
     return toast;
   }
 
-  // Enhancement 5: Navigate to next pending record
-  function navigateToNextPending(currentId) {
-    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
-      app: APP_102,
-      query: 'review_status not in ("Complete","Complete - No Issues","Complete - Changes Needed","Needs Analyst Review") and $id != ' + currentId + ' order by $id asc limit 1',
-      fields: ['$id']
-    }).then(function(resp) {
-      if (resp.records.length > 0) {
-        var nextId = resp.records[0].$id.value;
-        showToast('\u2713 Done! Loading next record...', [
-          { label: 'Back to List', onClick: function() { window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/'; } }
-        ]);
-        setTimeout(function() {
-          window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/show#record=' + nextId;
-          location.reload();
-        }, 1500);
-      } else {
-        showToast('\u2713 All done! No more pending records.', [
-          { label: 'Back to List', onClick: function() { window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/'; } }
-        ]);
-        setTimeout(function() {
-          window.location.href = KINTONE_BASE + '/k/' + APP_102 + '/';
-        }, 2500);
-      }
-    }).catch(function() {
+  // Enhancement 5: After completing/escalating, reload to stay in the user's current view
+  function reloadAfterAction() {
+    showToast('\u2713 Saved! Refreshing...');
+    setTimeout(function() {
       location.reload();
-    });
+    }, 1200);
   }
 
   function saveWithAudit(recordId, record, updates, action, user, notes) {
