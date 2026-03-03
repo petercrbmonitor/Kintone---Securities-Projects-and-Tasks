@@ -1,5 +1,10 @@
 /**
  * CRB Monitor - DARB App (App 23) Quick Task Assignment
+ * v1.2 - Bug fixes: double-click guard on Create Task button, newline
+ *         preservation in notes, escapeHtml quote escaping
+ * v1.1 - Removed dead code: unused CONFIG properties (DARB_FIELDS.RECORD_ID,
+ *         TICKER, SECURITY_TYPE, TASK_FIELDS.STATUS, DEFAULT_STATUS),
+ *         dead CSS classes (.crb-flag-btn-small, .crb-list-actions)
  *
  * Adds a "Flag for Review" / "Create Task" button to DARB records
  * that creates a task in App 57 (Projects/Tasks) with email notification.
@@ -26,10 +31,7 @@
 
     // Fields in App 23 (DARB) - matched to your field codes
     DARB_FIELDS: {
-      COMPANY_NAME: 'Text',               // Primary Business Name
-      RECORD_ID: '$id',                   // System field
-      TICKER: 'Ticker',                   // Optional
-      SECURITY_TYPE: 'Security_Type'      // Optional
+      COMPANY_NAME: 'Text'                // Primary Business Name
     },
 
     // Fields in App 57 (Tasks) - matched to your actual field codes
@@ -37,7 +39,6 @@
       TASK_NAME: 'Project_Name',          // Project Name field
       TASK_TYPE: 'Project_Field',         // Project Field dropdown
       ASSIGNEE: 'Task_Assignee',           // Assignee field
-      STATUS: 'status',                   // Dropdown (lowercase)
       DUE_DATE: 'end_date',               // End Date (lowercase)
       NOTES: 'project_description',       // Project Description (lowercase)
       SCOPE: 'Scope',                     // New: "Single Record" / "Batch" / "View"
@@ -80,7 +81,6 @@
     AUTHORIZED_GROUPS: ['Research', 'Research Admins'],
 
     // Default values
-    DEFAULT_STATUS: 'Not started - Committed',
     DEFAULT_DUE_DAYS: 7
   };
 
@@ -284,11 +284,6 @@
       box-shadow: 0 4px 12px rgba(20,184,166,0.4);
     }
 
-    .crb-flag-btn-small {
-      padding: 6px 12px;
-      font-size: 12px;
-    }
-
     /* Template groups */
     .crb-template-groups {
       margin-bottom: 16px;
@@ -403,10 +398,6 @@
       border: 1px solid #f5c6cb;
     }
 
-    /* List view button */
-    .crb-list-actions {
-      margin-bottom: 10px;
-    }
   `;
 
   // ============================================================
@@ -439,7 +430,7 @@
 
   function escapeHtml(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function getFieldValue(record, fieldCode, defaultVal) {
@@ -567,6 +558,7 @@
     var onCancel = options.onCancel;
 
     var overlay = document.createElement('div');
+    overlay.id = 'crb-task-overlay';
     overlay.className = 'crb-task-modal-overlay';
 
     // Build template groups HTML
@@ -855,7 +847,7 @@
       body.record[fields.DUE_DATE] = { value: taskData.dueDate };
     }
     if (fields.NOTES && taskData.notes) {
-      body.record[fields.NOTES] = { value: '<div>' + escapeHtml(taskData.notes) + '</div>' };
+      body.record[fields.NOTES] = { value: '<div>' + escapeHtml(taskData.notes).replace(/\n/g, '<br>') + '</div>' };
     }
     if (fields.SCOPE) {
       body.record[fields.SCOPE] = { value: taskData.scope };
@@ -941,6 +933,7 @@
       button.innerHTML = '\uD83D\uDEA9 Create Task';
 
       button.onclick = function() {
+        if (document.getElementById('crb-task-overlay')) return;
         var recordId = kintone.app.record.getId();
         var recordName = getFieldValue(record, CONFIG.DARB_FIELDS.COMPANY_NAME, 'Record #' + recordId);
         var recordUrl = getRecordUrl(CONFIG.DARB_APP_ID, recordId);
@@ -985,6 +978,7 @@
       button.innerHTML = '\uD83D\uDEA9 Create Task from View';
 
       button.onclick = function() {
+        if (document.getElementById('crb-task-overlay')) return;
         var viewUrl = getCurrentViewUrl();
         var recordCount = event.records ? event.records.length : 0;
         var viewName = event.viewName || 'Current View';
