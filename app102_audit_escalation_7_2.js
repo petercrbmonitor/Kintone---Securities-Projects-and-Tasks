@@ -1,5 +1,9 @@
 /**
  * App 102 - Ops Data Review Queue: Simplified Audit & Escalation
+ * v8.1 - Bug fixes: audit_log null guard, ESC listener leak in escalation
+ *         modal, confirmation_date/review_date cleared on revert,
+ *         fetchAllRecords guest-space URL, colorCodeRows on pagination,
+ *         esc() quote escaping, companyName XSS in record header
  * v8.0 - Removed dead code: unused per-reviewer stats counters
  *         (inProgress/notStarted/needsReview/issuesFound), unused issuesTotal
  *         variable, unused BADGES label properties in calculateGamifyStats
@@ -480,9 +484,10 @@
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Pending' },
               review_outcome: { value: '' },
+              review_date: { value: '' },
               escalated_to: { value: '' },
               resolution_type: { value: '' },
-              confirmation_date: { value: null },
+              confirmation_date: { value: '' },
               confirmed_peter: { value: [] },
               confirmed_peter_0: { value: [] }
             }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
@@ -732,9 +737,10 @@
     // Close handlers
     overlay.querySelector('#crb-cancel').onclick = function() { closeModal(); };
     overlay.onclick = function(e) { if (e.target === overlay) closeModal(); };
-    document.addEventListener('keydown', function escHandler(e) {
-      if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); }
-    });
+    var escHandler = function(e) {
+      if (e.key === 'Escape') closeModal();
+    };
+    document.addEventListener('keydown', escHandler);
 
     // Submit
     overlay.querySelector('#crb-submit').onclick = function() {
@@ -786,6 +792,7 @@
     };
 
     function closeModal() {
+      document.removeEventListener('keydown', escHandler);
       var el = document.getElementById('crb-escalation-modal');
       if (el) el.remove();
     }
@@ -868,7 +875,9 @@
           }
         });
       });
-      r.audit_log.value = auditLog;
+      if (r.audit_log) {
+        r.audit_log.value = auditLog;
+      }
     }
     return event;
   });
@@ -1032,7 +1041,7 @@
 
   function esc(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function todayStr() { return new Date().toISOString().split('T')[0]; }
@@ -1174,7 +1183,7 @@
     var offset = 0;
     var limit = 500;
     while (true) {
-      var response = await kintone.api('/k/v1/records', 'GET', {
+      var response = await kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
         app: kintone.app.getId(),
         query: 'limit ' + limit + ' offset ' + offset
       });
@@ -1400,7 +1409,7 @@
       'display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;';
     header.innerHTML =
       '<div style="display:flex;align-items:center;gap:16px;">' +
-      '<span style="font-size:16px;font-weight:600;">' + companyName + '</span>' +
+      '<span style="font-size:16px;font-weight:600;">' + esc(companyName) + '</span>' +
       '<span style="font-size:13px;opacity:0.8;">Progress: ' + done + '/4</span>' +
       badgeHTML + '</div>' +
       '<div style="display:flex;gap:16px;font-size:13px;">' +
@@ -1473,12 +1482,13 @@
 
   // Gamification - list view dashboard + color coding
   kintone.events.on('app.record.index.show', async function(event) {
-    if (document.getElementById('gamification-container')) return event;
-    var allRecords = await fetchAllRecords();
-    var stats = calculateGamifyStats(allRecords);
-    var container = buildGamificationPanel(stats, allRecords);
-    var headerSpace = kintone.app.getHeaderSpaceElement();
-    if (headerSpace) headerSpace.appendChild(container);
+    if (!document.getElementById('gamification-container')) {
+      var allRecords = await fetchAllRecords();
+      var stats = calculateGamifyStats(allRecords);
+      var container = buildGamificationPanel(stats, allRecords);
+      var headerSpace = kintone.app.getHeaderSpaceElement();
+      if (headerSpace) headerSpace.appendChild(container);
+    }
     colorCodeRows();
     return event;
   });

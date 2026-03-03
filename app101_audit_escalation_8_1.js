@@ -1,5 +1,9 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
+ * v8.9 - Bug fixes: audit_log null guard, ESC listener leak in escalation
+ *         modal, confirmation_date/review_date cleared on revert,
+ *         fetchAllRecords guest-space URL, colorCodeRows on pagination,
+ *         esc() quote escaping
  * v8.8 - Removed dead code: unused per-analyst pending/escalated/flagged
  *         counters and outcome variable in calculateStats
  * v8.7 - Fixed: gamification STATUS_COLORS and status breakdown aligned to
@@ -515,9 +519,10 @@
             var revertUpdates = {
               review_status: { value: 'Pending' },
               review_outcome: { value: 'No Changes Needed' },
+              review_date: { value: '' },
               escalated_to: { value: '' },
               resolution_type: { value: '' },
-              confirmation_date: { value: null }
+              confirmation_date: { value: '' }
             };
             // Clear analyst confirmation checkboxes
             var confirmKeys = Object.keys(ANALYST_CONFIRM);
@@ -792,9 +797,10 @@
     // Close handlers
     overlay.querySelector('#crb-cancel').onclick = function() { closeModal(); };
     overlay.onclick = function(e) { if (e.target === overlay) closeModal(); };
-    document.addEventListener('keydown', function escHandler(e) {
-      if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); }
-    });
+    var escHandler = function(e) {
+      if (e.key === 'Escape') closeModal();
+    };
+    document.addEventListener('keydown', escHandler);
 
     // Submit
     overlay.querySelector('#crb-submit').onclick = function() {
@@ -845,6 +851,7 @@
     };
 
     function closeModal() {
+      document.removeEventListener('keydown', escHandler);
       var el = document.getElementById('crb-escalation-modal');
       if (el) el.remove();
     }
@@ -928,7 +935,9 @@
           }
         });
       });
-      r.audit_log.value = auditLog;
+      if (r.audit_log) {
+        r.audit_log.value = auditLog;
+      }
     }
     return event;
   });
@@ -1119,7 +1128,7 @@
 
   function esc(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function todayStr() { return new Date().toISOString().split('T')[0]; }
@@ -1155,7 +1164,7 @@
     let offset = 0;
     const limit = 500;
     while (true) {
-      const response = await kintone.api('/k/v1/records', 'GET', {
+      const response = await kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
         app: kintone.app.getId(),
         query: 'limit ' + limit + ' offset ' + offset
       });
@@ -1359,12 +1368,13 @@
 
   // Gamification - list view dashboard
   kintone.events.on('app.record.index.show', async function(event) {
-    if (document.getElementById('gamification-container')) return event;
-    var allRecords = await fetchAllRecords();
-    var stats = calculateStats(allRecords);
-    var container = buildGamificationPanel(stats, allRecords);
-    var headerSpace = kintone.app.getHeaderSpaceElement();
-    if (headerSpace) headerSpace.appendChild(container);
+    if (!document.getElementById('gamification-container')) {
+      var allRecords = await fetchAllRecords();
+      var stats = calculateStats(allRecords);
+      var container = buildGamificationPanel(stats, allRecords);
+      var headerSpace = kintone.app.getHeaderSpaceElement();
+      if (headerSpace) headerSpace.appendChild(container);
+    }
     colorCodeRows();
     return event;
   });

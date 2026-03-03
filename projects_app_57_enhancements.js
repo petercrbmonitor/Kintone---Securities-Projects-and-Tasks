@@ -1,5 +1,8 @@
 /**
  * CRB Monitor - Projects/Tasks App (App 57) Enhancements
+ * Version: 1.3 - Bug fixes: closeSourceRecord awaited before reload,
+ *   isDueSoon time normalization, badge/button dedup on re-render,
+ *   .replace() regex for multi-space scope values
  * Version: 1.2 - Removed dead code: unused CONFIG properties (DARB_APP_ID,
  *   COLORS, 8 FIELDS entries), dead CSS classes (.crb-status-badge variants,
  *   .crb-overdue, .crb-due-soon, .crb-btn-open-link, .crb-assignee-tag),
@@ -177,7 +180,8 @@
     if (!dateStr) return false;
     const due = new Date(dateStr);
     const today = new Date();
-    const soon = new Date();
+    today.setHours(0, 0, 0, 0);
+    const soon = new Date(today);
     soon.setDate(soon.getDate() + days);
     return due >= today && due <= soon;
   }
@@ -194,6 +198,7 @@
   function addScopeBadge(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
     
     const scope = getFieldValue(record, CONFIG.FIELDS.SCOPE);
     const recordCount = getFieldValue(record, CONFIG.FIELDS.RECORD_COUNT, 1);
@@ -201,7 +206,7 @@
     if (!scope) return;
     
     const badge = document.createElement('span');
-    badge.className = `crb-scope-badge crb-scope-${scope.toLowerCase().replace(' ', '-')}`;
+    badge.className = `crb-scope-badge crb-scope-${scope.toLowerCase().replace(/ /g, '-')}`;
     
     if (scope === 'Single Record') {
       badge.textContent = '📄 Single Record';
@@ -217,6 +222,7 @@
   function addSourceAppBadge(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
 
     const sourceApp = getFieldValue(record, CONFIG.FIELDS.SOURCE_APP);
     if (!sourceApp) return;
@@ -241,6 +247,7 @@
   function addRecordLinkButton(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
 
     const link = getFieldValue(record, CONFIG.FIELDS.RECORD_LINK);
     if (!link) return;
@@ -269,6 +276,7 @@
   function addQuickActions(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
     
     const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
     
@@ -342,8 +350,8 @@
 
     var todayStr = new Date().toISOString().split('T')[0];
 
-    // Update the source record - fire and forget
-    kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+    // Update the source record
+    return kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
       app: sourceAppId,
       id: sourceRecordId,
       record: {
@@ -378,20 +386,12 @@
     try {
       await kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', body);
 
-      // If task is now complete, update the source app record (fire and forget)
+      // If task is now complete, update the source app record before reloading
       if (newStatus === CONFIG.STATUS.COMPLETE) {
-        closeSourceRecord();
+        await closeSourceRecord();
       }
 
-      if (typeof kintone.showNotification === 'function') {
-        kintone.showNotification({
-          text: `Status updated to: ${newStatus}`,
-          type: 'success'
-        });
-      } else {
-        alert(`Status updated to: ${newStatus}`);
-      }
-      
+      alert(`Status updated to: ${newStatus}`);
       location.reload();
     } catch (error) {
       alert('Error updating status: ' + error.message);
