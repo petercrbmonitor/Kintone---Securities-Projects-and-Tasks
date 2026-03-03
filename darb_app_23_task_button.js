@@ -1,15 +1,18 @@
 /**
- * CRB Monitor - DARB App (App 23) Quick Task Assignment
+ * CRB Monitor - DARB App (App 23) Quick Task Assignment + Auto-Review Creation
+ * v1.3 - Merged auto-create review records script (Apps 101 & 102)
  * v1.2 - Bug fixes: double-click guard on Create Task button, newline
  *         preservation in notes, escapeHtml quote escaping
  * v1.1 - Removed dead code: unused CONFIG properties (DARB_FIELDS.RECORD_ID,
  *         TICKER, SECURITY_TYPE, TASK_FIELDS.STATUS, DEFAULT_STATUS),
  *         dead CSS classes (.crb-flag-btn-small, .crb-list-actions)
  *
- * Adds a "Flag for Review" / "Create Task" button to DARB records
- * that creates a task in App 57 (Projects/Tasks) with email notification.
+ * Part 1: Adds a "Create Task" button to DARB records that creates a task
+ *         in App 57 (Projects/Tasks) with email notification.
  *
- * Works for both individual records and can reference bulk views.
+ * Part 2: On new Active profile creation, auto-creates one record in
+ *         App 101 (Tier Review) + one in App 102 (Ops Review) with
+ *         round-robin reviewer assignment.
  *
  * Installation:
  * 1. Go to App 23 Settings → Customization and Integration → JavaScript and CSS
@@ -29,9 +32,32 @@
     TASK_APP_ID: 57,
     DARB_APP_ID: 23,
 
+    // Review Apps
+    APP_101: 101,
+    APP_102: 102,
+
     // Fields in App 23 (DARB) - matched to your field codes
     DARB_FIELDS: {
-      COMPANY_NAME: 'Text'                // Primary Business Name
+      COMPANY_NAME: 'Text',               // Primary Business Name
+      PROFILE_STATUS: 'Drop_down_22',
+      TIER: 'Drop_down_2',
+      TICKER: 'Text_24',
+      SECTOR: 'Drop_down_3',
+      PURE_PLAY: 'Drop_down_18',
+      DOMICILE: 'Text_32',
+      LAST_TIER_REVIEW: 'Date_9'
+    },
+
+    // Auto-review round-robin assignment pools
+    TIER_REVIEW: {
+      TIER_1: 'Tamara',
+      TIER_23_POOL: ['Tim', 'Isaac']
+    },
+    OPS_REVIEW: {
+      POOL: [
+        { code: 'mel.dapanas@crbmonitor.com', name: 'Mel Dapanas' },
+        { code: 'joephillip.ollos@crbmonitor.com', name: 'Jaypee Ollos' }
+      ]
     },
 
     // Fields in App 57 (Tasks) - matched to your actual field codes
@@ -997,6 +1023,144 @@
       headerMenuEl.appendChild(button);
     });
 
+    return event;
+  });
+
+  // ============================================================
+  // PART 2: AUTO-CREATE REVIEW RECORDS IN APPS 101 & 102
+  // ============================================================
+
+  // Round-robin: App 101 (Tier 2/3 only - Tier 1 always Tamara)
+  function getNextReviewer101(tier) {
+    if (tier === '1A' || tier === '1B') {
+      return kintone.Promise.resolve(CONFIG.TIER_REVIEW.TIER_1);
+    }
+    var pool = CONFIG.TIER_REVIEW.TIER_23_POOL;
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: CONFIG.APP_101,
+      query: 'reviewer in ("Tim","Isaac") order by Record_number desc limit 1',
+      fields: ['reviewer']
+    }).then(function(resp) {
+      if (resp.records.length > 0) {
+        var last = resp.records[0].reviewer.value;
+        var idx = pool.indexOf(last);
+        return pool[(idx + 1) % pool.length];
+      }
+      return pool[0];
+    }).catch(function() {
+      return pool[0];
+    });
+  }
+
+  // Round-robin: App 102 (Mel / Jaypee)
+  function getNextReviewer102() {
+    var pool = CONFIG.OPS_REVIEW.POOL;
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: CONFIG.APP_102,
+      query: 'order by Record_number desc limit 1',
+      fields: ['reviewer']
+    }).then(function(resp) {
+      if (resp.records.length > 0 && resp.records[0].reviewer.value.length > 0) {
+        var lastCode = resp.records[0].reviewer.value[0].code;
+        var idx = pool.findIndex(function(u) { return u.code === lastCode; });
+        return pool[(idx + 1) % pool.length];
+      }
+      return pool[0];
+    }).catch(function() {
+      return pool[0];
+    });
+  }
+
+  function createReviewRecords(record, recordId) {
+    var profileStatus = record[CONFIG.DARB_FIELDS.PROFILE_STATUS].value;
+    if (profileStatus !== 'Active') {
+      console.log('[Auto-Review] Skipped - Profile Status is not Active');
+      return;
+    }
+
+    var tier = record[CONFIG.DARB_FIELDS.TIER].value || '';
+    var companyName = record[CONFIG.DARB_FIELDS.COMPANY_NAME].value || '';
+    var ticker = record[CONFIG.DARB_FIELDS.TICKER].value || '';
+    var sector = record[CONFIG.DARB_FIELDS.SECTOR].value || '';
+    var purePlay = record[CONFIG.DARB_FIELDS.PURE_PLAY].value || '';
+    var domicile = record[CONFIG.DARB_FIELDS.DOMICILE].value || '';
+    var lastTierReview = record[CONFIG.DARB_FIELDS.LAST_TIER_REVIEW].value || null;
+    var today = new Date().toISOString().split('T')[0];
+    var now = new Date().toISOString();
+
+    // App 101: Tier Review
+    getNextReviewer101(tier).then(function(reviewer101) {
+      return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
+        app: CONFIG.APP_101,
+        record: {
+          Lookup: { value: String(recordId) },
+          company_name: { value: companyName },
+          ticker: { value: ticker },
+          sector: { value: sector },
+          tier: { value: tier },
+          pure_play: { value: purePlay },
+          profile_status: { value: profileStatus },
+          Date: { value: lastTierReview },
+          reviewer: { value: reviewer101 },
+          assigned_by: { value: 'Peter' },
+          date_assigned: { value: today },
+          review_status: { value: 'Not Started' },
+          review_outcome: { value: 'No Changes Needed' },
+          audit_log: {
+            value: [{
+              value: {
+                audit_action: { value: 'Record Created' },
+                audit_user: { value: 'System (Auto)' },
+                audit_timestamp: { value: now },
+                audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer101 }
+              }
+            }]
+          }
+        }
+      });
+    }).then(function() {
+      console.log('[Auto-Review] App 101 record created for: ' + companyName);
+    }).catch(function(e) {
+      console.error('[Auto-Review] App 101 failed:', e.message || e);
+    });
+
+    // App 102: Ops Data Review
+    getNextReviewer102().then(function(reviewer102) {
+      return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
+        app: CONFIG.APP_102,
+        record: {
+          Lookup: { value: String(recordId) },
+          company_name: { value: companyName },
+          sector: { value: sector },
+          crbm_tier: { value: tier },
+          pure_play: { value: purePlay },
+          Text: { value: profileStatus },
+          Text_0: { value: domicile },
+          reviewer: { value: [{ code: reviewer102.code }] },
+          review_status: { value: 'Not Started' },
+          priority: { value: 'Medium' },
+          audit_log: {
+            value: [{
+              value: {
+                audit_action: { value: 'Record Created' },
+                audit_user: { value: 'System (Auto)' },
+                audit_timestamp: { value: now },
+                audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer102.name }
+              }
+            }]
+          }
+        }
+      });
+    }).then(function() {
+      console.log('[Auto-Review] App 102 record created for: ' + companyName);
+    }).catch(function(e) {
+      console.error('[Auto-Review] App 102 failed:', e.message || e);
+    });
+  }
+
+  // Fires AFTER successful save - App 23 record is already committed
+  kintone.events.on('app.record.create.submit.success', function(event) {
+    createReviewRecords(event.record, event.recordId);
     return event;
   });
 
