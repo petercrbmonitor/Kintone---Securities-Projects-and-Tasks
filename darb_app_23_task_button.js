@@ -1071,6 +1071,19 @@
     });
   }
 
+  // Check if review records already exist for this App 23 record
+  function reviewRecordExists(appId, recordId) {
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: appId,
+      query: 'Lookup = "' + recordId + '" limit 1',
+      fields: ['$id']
+    }).then(function(resp) {
+      return resp.records.length > 0;
+    }).catch(function() {
+      return false;
+    });
+  }
+
   function createReviewRecords(record, recordId) {
     var profileStatus = record[CONFIG.DARB_FIELDS.PROFILE_STATUS].value;
     if (profileStatus !== 'Active') {
@@ -1088,78 +1101,94 @@
     var today = new Date().toISOString().split('T')[0];
     var now = new Date().toISOString();
 
-    // App 101: Tier Review
-    getNextReviewer101(tier).then(function(reviewer101) {
-      return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
-        app: CONFIG.APP_101,
-        record: {
-          Lookup: { value: String(recordId) },
-          company_name: { value: companyName },
-          ticker: { value: ticker },
-          sector: { value: sector },
-          tier: { value: tier },
-          pure_play: { value: purePlay },
-          profile_status: { value: profileStatus },
-          Date: { value: lastTierReview },
-          reviewer: { value: reviewer101 },
-          assigned_by: { value: 'Peter' },
-          date_assigned: { value: today },
-          review_status: { value: 'Not Started' },
-          review_outcome: { value: 'No Changes Needed' },
-          audit_log: {
-            value: [{
-              value: {
-                audit_action: { value: 'Record Created' },
-                audit_user: { value: 'System (Auto)' },
-                audit_timestamp: { value: now },
-                audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer101 }
-              }
-            }]
+    // App 101: Tier Review (skip if already exists)
+    reviewRecordExists(CONFIG.APP_101, recordId).then(function(exists) {
+      if (exists) {
+        console.log('[Auto-Review] App 101 record already exists for App 23 #' + recordId);
+        return;
+      }
+      return getNextReviewer101(tier).then(function(reviewer101) {
+        return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
+          app: CONFIG.APP_101,
+          record: {
+            Lookup: { value: String(recordId) },
+            company_name: { value: companyName },
+            ticker: { value: ticker },
+            sector: { value: sector },
+            tier: { value: tier },
+            pure_play: { value: purePlay },
+            profile_status: { value: profileStatus },
+            Date: { value: lastTierReview },
+            reviewer: { value: reviewer101 },
+            assigned_by: { value: 'Peter' },
+            date_assigned: { value: today },
+            review_status: { value: 'Not Started' },
+            review_outcome: { value: 'No Changes Needed' },
+            audit_log: {
+              value: [{
+                value: {
+                  audit_action: { value: 'Record Created' },
+                  audit_user: { value: 'System (Auto)' },
+                  audit_timestamp: { value: now },
+                  audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer101 }
+                }
+              }]
+            }
           }
-        }
+        });
+      }).then(function() {
+        console.log('[Auto-Review] App 101 record created for: ' + companyName);
       });
-    }).then(function() {
-      console.log('[Auto-Review] App 101 record created for: ' + companyName);
     }).catch(function(e) {
       console.error('[Auto-Review] App 101 failed:', e.message || e);
     });
 
-    // App 102: Ops Data Review
-    getNextReviewer102().then(function(reviewer102) {
-      return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
-        app: CONFIG.APP_102,
-        record: {
-          Lookup: { value: String(recordId) },
-          company_name: { value: companyName },
-          sector: { value: sector },
-          crbm_tier: { value: tier },
-          pure_play: { value: purePlay },
-          Text: { value: profileStatus },
-          Text_0: { value: domicile },
-          reviewer: { value: [{ code: reviewer102.code }] },
-          review_status: { value: 'Not Started' },
-          priority: { value: 'Medium' },
-          audit_log: {
-            value: [{
-              value: {
-                audit_action: { value: 'Record Created' },
-                audit_user: { value: 'System (Auto)' },
-                audit_timestamp: { value: now },
-                audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer102.name }
-              }
-            }]
+    // App 102: Ops Data Review (skip if already exists)
+    reviewRecordExists(CONFIG.APP_102, recordId).then(function(exists) {
+      if (exists) {
+        console.log('[Auto-Review] App 102 record already exists for App 23 #' + recordId);
+        return;
+      }
+      return getNextReviewer102().then(function(reviewer102) {
+        return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
+          app: CONFIG.APP_102,
+          record: {
+            Lookup: { value: String(recordId) },
+            company_name: { value: companyName },
+            sector: { value: sector },
+            crbm_tier: { value: tier },
+            pure_play: { value: purePlay },
+            Text: { value: profileStatus },
+            Text_0: { value: domicile },
+            reviewer: { value: [{ code: reviewer102.code }] },
+            review_status: { value: 'Not Started' },
+            priority: { value: 'Medium' },
+            audit_log: {
+              value: [{
+                value: {
+                  audit_action: { value: 'Record Created' },
+                  audit_user: { value: 'System (Auto)' },
+                  audit_timestamp: { value: now },
+                  audit_notes: { value: 'Auto-created from App 23 #' + recordId + ' | Reviewer: ' + reviewer102.name }
+                }
+              }]
+            }
           }
-        }
+        });
+      }).then(function() {
+        console.log('[Auto-Review] App 102 record created for: ' + companyName);
       });
-    }).then(function() {
-      console.log('[Auto-Review] App 102 record created for: ' + companyName);
     }).catch(function(e) {
       console.error('[Auto-Review] App 102 failed:', e.message || e);
     });
   }
 
   // Fires AFTER successful save - App 23 record is already committed
-  kintone.events.on('app.record.create.submit.success', function(event) {
+  // Handles both new record creation and edits (e.g. status changed to Active)
+  kintone.events.on([
+    'app.record.create.submit.success',
+    'app.record.edit.submit.success'
+  ], function(event) {
     createReviewRecords(event.record, event.recordId);
     return event;
   });
