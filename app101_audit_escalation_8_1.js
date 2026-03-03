@@ -1137,11 +1137,11 @@
   const ANALYSTS = ['Peter', 'Tamara', 'Jim', 'Isaac', 'Tim', 'Anthony', 'Kyle'];
 
   const BADGES = {
-    10: { icon: '🥉', label: '10 Reviews' },
-    25: { icon: '🥈', label: '25 Reviews' },
-    50: { icon: '🥇', label: '50 Reviews' },
-    100: { icon: '💎', label: '100 Reviews' },
-    250: { icon: '👑', label: '250 Reviews' }
+    10: '🥉',
+    25: '🥈',
+    50: '🥇',
+    100: '💎',
+    250: '👑'
   };
 
   const STATUS_COLORS = {
@@ -1280,7 +1280,7 @@
       sortedAnalysts.forEach(function(analyst, index) {
         var progress = analyst.total > 0 ? Math.round((analyst.completed / analyst.total) * 100) : 0;
         var medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-        var badge = analyst.badge ? analyst.badge.icon : '';
+        var badge = analyst.badge || '';
         var streak = analyst.streak > 0 ? '🔥' + analyst.streak : '-';
         html +=
           '<tr style="border-top: 1px solid rgba(255,255,255,0.1);">' +
@@ -1340,12 +1340,15 @@
       'font-size: 24px; font-weight: bold; z-index: 10000;' +
       'box-shadow: 0 10px 40px rgba(0,0,0,0.3); animation: popIn 0.3s ease-out;';
     celebration.innerHTML = '🎉 Review Complete! 🎉';
-    var animStyle = document.createElement('style');
-    animStyle.textContent =
-      '@keyframes popIn {' +
-      '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
-      '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
-    document.head.appendChild(animStyle);
+    if (!document.getElementById('crb-popIn-anim')) {
+      var animStyle = document.createElement('style');
+      animStyle.id = 'crb-popIn-anim';
+      animStyle.textContent =
+        '@keyframes popIn {' +
+        '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
+        '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
+      document.head.appendChild(animStyle);
+    }
     document.body.appendChild(celebration);
     setTimeout(function() {
       celebration.style.transition = 'opacity 0.5s';

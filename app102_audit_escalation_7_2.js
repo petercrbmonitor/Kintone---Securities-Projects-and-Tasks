@@ -1117,11 +1117,11 @@
   var ADMINS = ['Tamara', 'Peter'];
 
   var BADGES = {
-    10:  { icon: '🥉' },
-    25:  { icon: '🥈' },
-    50:  { icon: '🥇' },
-    100: { icon: '💎' },
-    250: { icon: '👑' }
+    10:  '🥉',
+    25:  '🥈',
+    50:  '🥇',
+    100: '💎',
+    250: '👑'
   };
 
   var STATUS_COLORS = {
@@ -1317,7 +1317,7 @@
       sortedAnalysts.forEach(function(analyst, index) {
         var progress = analyst.total > 0 ? Math.round((analyst.completed / analyst.total) * 100) : 0;
         var medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-        var mb = analyst.milestoneBadge ? analyst.milestoneBadge.icon : '';
+        var mb = analyst.milestoneBadge || '';
         var streak = analyst.streak > 0 ? '🔥' + analyst.streak : '-';
         var barColor = progress === 100 ? '#4ade80' : progress >= 50 ? '#3b82f6' : '#f59e0b';
         html += '<tr style="border-top: 1px solid rgba(255,255,255,0.1);">' +
@@ -1426,12 +1426,15 @@
       'font-size: 24px; font-weight: bold; z-index: 10000;' +
       'box-shadow: 0 10px 40px rgba(0,0,0,0.3); animation: popIn 0.3s ease-out;';
     celebration.textContent = message;
-    var animStyle = document.createElement('style');
-    animStyle.textContent =
-      '@keyframes popIn {' +
-      '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
-      '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
-    document.head.appendChild(animStyle);
+    if (!document.getElementById('crb-popIn-anim')) {
+      var animStyle = document.createElement('style');
+      animStyle.id = 'crb-popIn-anim';
+      animStyle.textContent =
+        '@keyframes popIn {' +
+        '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
+        '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
+      document.head.appendChild(animStyle);
+    }
     document.body.appendChild(celebration);
     setTimeout(function() {
       celebration.style.transition = 'opacity 0.5s';
