@@ -117,11 +117,13 @@
     'Needs Further Research'
   ];
 
+  // Resolution checkbox options (must match Kintone field code: Check_box)
   var RESOLUTION_TYPES = [
     'No Changes Required',
-    'Data Corrected',
-    'Information Added',
-    'Record Updated'
+    'Official Name Updated',
+    'Tickers/Exchanges Updated',
+    'CUSIP/ISIN Updated',
+    'Source Links Added/Removed'
   ];
 
   var CATEGORY_TO_TASK_TYPE = {
@@ -423,7 +425,7 @@
     kintone.app.record.setFieldShown('review_status', false);
     kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
-    kintone.app.record.setFieldShown('resolution', false);
+    kintone.app.record.setFieldShown('Check_box', false);
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
 
     // Helper: is this a "completed" status? Handles legacy values like "Complete - No Issues"
@@ -459,33 +461,7 @@
       completeBtn.className = 'crb-action-btn crb-btn-complete';
       completeBtn.textContent = '\u2713 Complete';
       completeBtn.onclick = function() {
-        // Enhancement 1: Confirmation modal with resolution tracking
-        openConfirmModal({
-          title: 'Confirm Complete',
-          subtitle: companyName + ' (DARB #' + darbId + ')',
-          headerColor: 'linear-gradient(135deg, #22c55e, #16a34a)',
-          outcomePreview: 'Review completed',
-          formHtml: buildResolutionDropdown('crb-resolution-type'),
-          confirmLabel: '\u2713 Complete Review',
-          confirmColor: '#22c55e',
-          validate: function(overlay) {
-            var val = overlay.querySelector('#crb-resolution-type').value;
-            if (!val) return 'Please select whether changes were made.';
-            return null;
-          },
-          onConfirm: function(overlay) {
-            var resolution = overlay.querySelector('#crb-resolution-type').value;
-            return saveWithAudit(recordId, r, {
-              review_status: { value: 'Complete' },
-              review_date: { value: todayStr() },
-              review_outcome: { value: 'No Issues Found' },
-              resolution_type: { value: resolution }
-            }, 'Status: Complete', loginUser, 'Resolution: ' + resolution)
-              .then(function() {
-                reloadAfterAction();
-              });
-          }
-        });
+        openResolutionModal(companyName, darbId, recordId, r, loginUser);
       };
       bar.appendChild(completeBtn);
 
@@ -517,7 +493,7 @@
               review_outcome: { value: '' },
               review_date: { value: '' },
               escalated_to: { value: '' },
-              resolution_type: { value: '' },
+              Check_box: { value: [] },
               confirmation_date: { value: '' },
               confirmed_peter: { value: [] },
               confirmed_peter_0: { value: [] }
@@ -541,40 +517,29 @@
         if (isAnalyst) researchBtn.style.display = '';
       });
       researchBtn.onclick = function() {
-        openConfirmModal({
+        openResolutionModal(companyName, darbId, recordId, r, loginUser, {
           title: 'Confirm Research Complete',
-          subtitle: companyName + ' (DARB #' + darbId + ')',
           headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-          outcomePreview: 'Research review completed by ' + loginUser,
-          formHtml: buildResolutionDropdown('crb-resolution-type'),
           confirmLabel: 'Complete Research',
           confirmColor: '#6366f1',
-          validate: function(overlay) {
-            var val = overlay.querySelector('#crb-resolution-type').value;
-            if (!val) return 'Please select whether changes were made.';
-            return null;
-          },
-          onConfirm: function(overlay) {
-            var resolution = overlay.querySelector('#crb-resolution-type').value;
+          buildUpdates: function(selected) {
             var updates = {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
               confirmation_date: { value: todayStr() },
               review_outcome: { value: 'Analyst Reviewed' },
-              resolution_type: { value: resolution }
+              Check_box: { value: selected }
             };
             var confirmField = ANALYST_CONFIRM[loginUser];
             if (confirmField) {
               updates[confirmField] = { value: ['Confirmed'] };
             }
-            return saveWithAudit(recordId, r, updates,
-              'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
-              .then(function() {
-                return closeApp57Task('Ops Review (102)', recordId);
-              })
-              .then(function() {
-                reloadAfterAction();
-              });
+            return updates;
+          },
+          auditAction: 'Confirmed by ' + loginUser,
+          afterSave: function() {
+            return closeApp57Task('Ops Review (102)', recordId)
+              .then(function() { reloadAfterAction(); });
           }
         });
       };
@@ -706,14 +671,20 @@
   // RESOLUTION MODAL (Complete with checkbox selection)
   // ============================================================
 
-  function openResolutionModal(companyName, darbId, recordId, record, loginUser) {
+  function openResolutionModal(companyName, darbId, recordId, record, loginUser, opts) {
+    opts = opts || {};
+    var title = opts.title || 'Complete Review';
+    var headerColor = opts.headerColor || 'linear-gradient(135deg, #22c55e, #16a34a)';
+    var confirmLabel = opts.confirmLabel || '\u2713 Complete Review';
+    var confirmColor = opts.confirmColor || '#22c55e';
+
     var overlay = document.createElement('div');
     overlay.id = 'crb-confirm-modal';
     overlay.className = 'crb-modal-overlay';
 
     var checkboxHtml = '<div class="crb-checkbox-group">';
-    for (var i = 0; i < RESOLUTION_OPTIONS.length; i++) {
-      var opt = RESOLUTION_OPTIONS[i];
+    for (var i = 0; i < RESOLUTION_TYPES.length; i++) {
+      var opt = RESOLUTION_TYPES[i];
       checkboxHtml += '<label class="crb-checkbox-item">'
         + '<input type="checkbox" name="crb-resolution" value="' + esc(opt) + '"'
         + (opt === 'No Changes Required' ? ' data-exclusive="true"' : '')
@@ -723,8 +694,8 @@
 
     overlay.innerHTML = '\
       <div class="crb-modal" style="width:420px;">\
-        <div class="crb-modal-header" style="background:linear-gradient(135deg, #22c55e, #16a34a);">\
-          <h3>Complete Review</h3>\
+        <div class="crb-modal-header" style="background:' + headerColor + ';">\
+          <h3>' + esc(title) + '</h3>\
           <div class="crb-modal-sub">' + esc(companyName) + ' (DARB #' + esc(darbId) + ')</div>\
         </div>\
         <div class="crb-modal-body">\
@@ -736,7 +707,7 @@
         </div>\
         <div class="crb-modal-footer">\
           <button class="crb-modal-btn crb-modal-btn-secondary" id="crb-confirm-cancel">Cancel</button>\
-          <button class="crb-modal-btn crb-modal-btn-primary" id="crb-confirm-ok" style="background:#22c55e;">\u2713 Complete Review</button>\
+          <button class="crb-modal-btn crb-modal-btn-primary" id="crb-confirm-ok" style="background:' + confirmColor + ';">' + esc(confirmLabel) + '</button>\
         </div>\
       </div>';
 
@@ -752,12 +723,10 @@
             if (checkboxes[j] !== e.target) checkboxes[j].checked = false;
           }
         } else if (!isExclusive && e.target.checked) {
-          // Uncheck "No Changes Required" when any change option is checked
           for (var k = 0; k < checkboxes.length; k++) {
             if (checkboxes[k].getAttribute('data-exclusive') === 'true') checkboxes[k].checked = false;
           }
         }
-        // Update highlight classes
         for (var h = 0; h < checkboxes.length; h++) {
           checkboxes[h].parentElement.className = 'crb-checkbox-item' + (checkboxes[h].checked ? ' crb-checked' : '');
         }
@@ -790,18 +759,32 @@
 
       var auditNotes = selected.join(', ');
 
-      saveWithAudit(recordId, record, {
-        review_status: { value: 'Complete' },
-        review_date: { value: todayStr() },
-        resolution: { value: selected }
-      }, 'Status: Complete', loginUser, auditNotes)
+      // Use custom buildUpdates if provided, otherwise default Complete flow
+      var updates;
+      if (opts.buildUpdates) {
+        updates = opts.buildUpdates(selected);
+      } else {
+        updates = {
+          review_status: { value: 'Complete' },
+          review_date: { value: todayStr() },
+          Check_box: { value: selected }
+        };
+      }
+
+      var auditAction = opts.auditAction || 'Status: Complete';
+
+      saveWithAudit(recordId, record, updates, auditAction, loginUser, auditNotes)
         .then(function() {
           overlay.remove();
-          navigateToNextPending(recordId);
+          if (opts.afterSave) {
+            return opts.afterSave();
+          } else {
+            reloadAfterAction();
+          }
         })
         .catch(function(e) {
           btn.disabled = false;
-          btn.textContent = '\u2713 Complete Review';
+          btn.textContent = confirmLabel;
           var msgEl = overlay.querySelector('#crb-confirm-msg');
           if (msgEl) {
             msgEl.className = 'crb-message crb-message-error show';
@@ -983,7 +966,7 @@
     kintone.app.record.setFieldShown('review_status', false);
     kintone.app.record.setFieldShown('review_outcome', false);
     kintone.app.record.setFieldShown('escalated_to', false);
-    kintone.app.record.setFieldShown('resolution', false);
+    kintone.app.record.setFieldShown('Check_box', false);
 
     return event;
   });
