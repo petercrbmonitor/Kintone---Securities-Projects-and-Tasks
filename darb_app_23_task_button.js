@@ -115,6 +115,14 @@
   // ============================================================
 
   const TASK_TEMPLATES = {
+    changes: [
+      { name: 'Possible Removal', type: 'Tier/Profile Reviews', prefix: 'Possible Removal: ' },
+      { name: 'Sector Change', type: 'Kintone', prefix: 'Sector Change: ' },
+      { name: 'Tier Change', type: 'Tier/Profile Reviews', prefix: 'Tier Change: ' },
+      { name: 'Add Source Documents', type: 'Research', prefix: 'Add Source Docs: ' },
+      { name: 'Name Change', type: 'Kintone', prefix: 'Name Change: ' },
+      { name: 'Security Change', type: 'Database Maintenance', prefix: 'Security Change: ' }
+    ],
     core: [
       { name: 'Review Profile', type: 'Tier/Profile Reviews', prefix: 'Review: ' },
       { name: 'Update Data', type: 'Kintone', prefix: 'Update: ' },
@@ -137,6 +145,7 @@
 
   // Template group display labels and background tints
   var TEMPLATE_GROUP_META = {
+    changes: { label: 'Quick Select', tint: '#fef3c7' },
     core: { label: 'Core', tint: '#f0fdf9' },
     securities: { label: 'Securities', tint: '#f0f9ff' },
     process: { label: 'Process', tint: '#fdf8f0' }
