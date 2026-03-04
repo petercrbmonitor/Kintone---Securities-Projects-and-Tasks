@@ -1,13 +1,34 @@
 /**
  * App 101 - DARB Tier Review Log: Simplified Audit & Escalation
- * v8.2 - Enhanced: confirmation modal, flag summary, guided escalation,
+ * v8.9 - Bug fixes: audit_log null guard, ESC listener leak in escalation
+ *         modal, confirmation_date/review_date cleared on revert,
+ *         fetchAllRecords guest-space URL, colorCodeRows on pagination,
+ *         esc() quote escaping
+ * v8.8 - Removed dead code: unused per-analyst pending/escalated/flagged
+ *         counters and outcome variable in calculateStats
+ * v8.7 - Fixed: gamification STATUS_COLORS and status breakdown aligned to
+ *         actual app statuses (Pending/Needs Analyst Review/Complete),
+ *         flagged counter now counts all 'Flagged for *' outcomes (not just Peter)
+ * v8.6 - Merged gamification (leaderboard, badges, streaks, celebration,
+ *         color-coded rows) from standalone file into single deployment
+ * v8.5 - Fixed: revert sets review_outcome to default (not empty) to avoid
+ *         radio button validation errors, removed type property from
+ *         saveWithAudit subtable values (Kintone infers from schema)
+ * v8.4 - Fixed: fallback analyst caching, ESC listener leak, XSS in task
+ *         descriptions, missing review_outcome on Research Complete
+ *         Added: resolution_type tracking (auto on Complete, dropdown on
+ *         Research Complete), auto-close App 57 task on Research Complete,
+ *         category-to-task-type mapping, safer escalation order, full
+ *         field clearing on Revert (escalated_to, confirmation, resolution)
+ * v8.3 - Fixed: dropdown caching bug, assignee validation, select appearance
+ *         Enhanced: confirmation modal, flag summary, guided escalation,
  *         guidance banner, next-record navigation, readable timestamps
  *
  * Statuses: Pending -> Complete / Needs Analyst Review
  * Junior (Tim/Isaac): Complete + Escalate buttons
  * Analyst (Peter/Tamara): Research Complete button
  * Escalation creates App 57 task (assign to + notes only)
- * Works alongside darb_review_gamification.js
+ * All features consolidated into this single file
  */
 
 (function() {
@@ -20,6 +41,12 @@
   // Group-based roles (matches Kintone People & Groups)
   var ANALYST_GROUP = 'Research Admins';
   var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
+
+  // Fallback analyst list if group API fails (permissions, network, etc.)
+  var FALLBACK_ANALYSTS = [
+    { name: 'Peter', email: 'peter@crbmonitor.com' },
+    { name: 'Tamara', email: 'tamara.guy@crbmonitor.com' }
+  ];
 
   // Confirmation checkbox fields per analyst (Kintone field codes)
   // Only analysts with dedicated checkbox fields need entries here
@@ -35,17 +62,21 @@
 
   // Fetch group members (cached per page load)
   function getAnalystMembers() {
-    if (_analystMembers) return Promise.resolve(_analystMembers);
+    if (_analystMembers !== null) return Promise.resolve(_analystMembers);
     return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
       code: ANALYST_GROUP
     }).then(function(resp) {
       _analystMembers = (resp.users || []).map(function(u) {
         return { name: u.name, email: u.code };
       });
+      if (_analystMembers.length === 0) {
+        _analystMembers = FALLBACK_ANALYSTS;
+      }
       return _analystMembers;
     }).catch(function() {
-      _analystMembers = [];
-      return _analystMembers;
+      // Group API failed — cache fallback so email resolution works on submit
+      _analystMembers = FALLBACK_ANALYSTS;
+      return FALLBACK_ANALYSTS;
     });
   }
 
@@ -74,6 +105,21 @@
     'Securities / Exchange Issue',
     'Needs Further Research'
   ];
+
+  var RESOLUTION_TYPES = [
+    'No Changes Required',
+    'Data Corrected',
+    'Information Added',
+    'Record Updated'
+  ];
+
+  var CATEGORY_TO_TASK_TYPE = {
+    'Data Mismatch': 'Database Maintenance',
+    'Missing Information': 'Database Maintenance',
+    'Tier Classification Question': 'Tier/Profile Reviews',
+    'Securities / Exchange Issue': 'Database Maintenance',
+    'Needs Further Research': 'Research'
+  };
 
   var FLAG_DEFS = [
     { code: 'flag_description', label: 'Business Description', note: 'note_description' },
@@ -202,6 +248,11 @@
       background: #fff;\
       box-sizing: border-box;\
       transition: border-color 0.2s;\
+    }\
+    .crb-form-group select {\
+      -webkit-appearance: menulist;\
+      appearance: menulist;\
+      cursor: pointer;\
     }\
     .crb-form-group select:focus,\
     .crb-form-group textarea:focus {\
@@ -427,11 +478,13 @@
           confirmLabel: '\u2713 Complete Review',
           confirmColor: '#22c55e',
           onConfirm: function() {
+            var resolutionVal = hasFlags ? 'Record Updated' : 'No Changes Required';
             return saveWithAudit(recordId, r, {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
-              review_outcome: { value: outcomeVal }
-            }, 'Status: Complete', loginUser, hasFlags ? 'Updates made' : 'No changes needed')
+              review_outcome: { value: outcomeVal },
+              resolution_type: { value: resolutionVal }
+            }, 'Status: Complete', loginUser, 'Resolution: ' + resolutionVal)
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -463,10 +516,21 @@
           confirmLabel: 'Revert to Pending',
           confirmColor: '#f59e0b',
           onConfirm: function() {
-            return saveWithAudit(recordId, r, {
+            var revertUpdates = {
               review_status: { value: 'Pending' },
-              review_outcome: { value: '' }
-            }, 'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
+              review_outcome: { value: 'No Changes Needed' },
+              review_date: { value: '' },
+              escalated_to: { value: '' },
+              resolution_type: { value: '' },
+              confirmation_date: { value: '' }
+            };
+            // Clear analyst confirmation checkboxes
+            var confirmKeys = Object.keys(ANALYST_CONFIRM);
+            for (var ci = 0; ci < confirmKeys.length; ci++) {
+              revertUpdates[ANALYST_CONFIRM[confirmKeys[ci]]] = { value: [] };
+            }
+            return saveWithAudit(recordId, r, revertUpdates,
+              'Status: Reverted to Pending', loginUser, 'Reverted from Complete')
               .then(function() {
                 location.reload();
               });
@@ -490,21 +554,33 @@
           title: 'Confirm Research Complete',
           subtitle: companyName + ' (DARB #' + darbId + ')',
           headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-          outcomePreview: 'Confirmed by ' + loginUser,
+          outcomePreview: 'Research review completed by ' + loginUser,
+          formHtml: buildResolutionDropdown('crb-resolution-type'),
           confirmLabel: 'Complete Research',
           confirmColor: '#6366f1',
-          onConfirm: function() {
+          validate: function(overlay) {
+            var val = overlay.querySelector('#crb-resolution-type').value;
+            if (!val) return 'Please select whether changes were made.';
+            return null;
+          },
+          onConfirm: function(overlay) {
+            var resolution = overlay.querySelector('#crb-resolution-type').value;
             var updates = {
               review_status: { value: 'Complete' },
               review_date: { value: todayStr() },
-              confirmation_date: { value: todayStr() }
+              confirmation_date: { value: todayStr() },
+              review_outcome: { value: 'Analyst Reviewed' },
+              resolution_type: { value: resolution }
             };
             var confirmField = ANALYST_CONFIRM[loginUser];
             if (confirmField) {
               updates[confirmField] = { value: ['Confirmed'] };
             }
             return saveWithAudit(recordId, r, updates,
-              'Confirmed by ' + loginUser, loginUser, 'Research review completed')
+              'Confirmed by ' + loginUser, loginUser, 'Resolution: ' + resolution)
+              .then(function() {
+                return closeApp57Task('Tier Review (101)', recordId);
+              })
               .then(function() {
                 navigateToNextPending(recordId);
               });
@@ -522,6 +598,18 @@
   // CONFIRMATION MODAL (Enhancement 1)
   // ============================================================
 
+  function buildResolutionDropdown(selectId) {
+    var opts = '<option value="">-- Select resolution --</option>';
+    for (var i = 0; i < RESOLUTION_TYPES.length; i++) {
+      opts += '<option value="' + RESOLUTION_TYPES[i] + '">' + RESOLUTION_TYPES[i] + '</option>';
+    }
+    return '\
+      <div class="crb-form-group" style="margin-top:12px;">\
+        <label style="font-weight:600;color:#334155;">Were changes made?</label>\
+        <select id="' + selectId + '" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">' + opts + '</select>\
+      </div>';
+  }
+
   function openConfirmModal(options) {
     var overlay = document.createElement('div');
     overlay.id = 'crb-confirm-modal';
@@ -533,6 +621,9 @@
     }
     if (options.outcomePreview) {
       detailsHtml += '<div class="crb-confirm-detail"><strong>Review Outcome:</strong> ' + esc(options.outcomePreview) + '</div>';
+    }
+    if (options.formHtml) {
+      detailsHtml += options.formHtml;
     }
 
     var headerBg = options.headerColor || 'linear-gradient(135deg, #22c55e, #16a34a)';
@@ -555,19 +646,37 @@
 
     document.body.appendChild(overlay);
 
-    overlay.querySelector('#crb-confirm-cancel').onclick = function() { overlay.remove(); };
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-    document.addEventListener('keydown', function escH(e) {
-      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escH); }
-    });
+    function cleanup() {
+      document.removeEventListener('keydown', escH);
+      overlay.remove();
+    }
+    function escH(e) {
+      if (e.key === 'Escape') cleanup();
+    }
+    document.addEventListener('keydown', escH);
+
+    overlay.querySelector('#crb-confirm-cancel').onclick = function() { cleanup(); };
+    overlay.onclick = function(e) { if (e.target === overlay) cleanup(); };
 
     overlay.querySelector('#crb-confirm-ok').onclick = function() {
+      if (options.validate) {
+        var validationError = options.validate(overlay);
+        if (validationError) {
+          var msgEl = overlay.querySelector('#crb-confirm-msg');
+          if (msgEl) {
+            msgEl.className = 'crb-message crb-message-error show';
+            msgEl.textContent = validationError;
+          }
+          return;
+        }
+      }
+
       var btn = overlay.querySelector('#crb-confirm-ok');
       btn.disabled = true;
       btn.textContent = 'Saving...';
 
       try {
-        var result = options.onConfirm();
+        var result = options.onConfirm(overlay);
       } catch (syncErr) {
         btn.disabled = false;
         btn.textContent = options.confirmLabel || 'Confirm';
@@ -580,7 +689,7 @@
       }
       if (result && typeof result.then === 'function') {
         result.then(function() {
-          overlay.remove();
+          cleanup();
         }).catch(function(e) {
           btn.disabled = false;
           btn.textContent = options.confirmLabel || 'Confirm';
@@ -674,17 +783,24 @@
     getAnalystMembers().then(function(members) {
       var sel = overlay.querySelector('#crb-assignee');
       if (!sel) return;
-      sel.innerHTML = members.map(function(m) {
-        return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
-      }).join('');
+      var opts = '<option value="">-- Select analyst --</option>';
+      if (members.length === 0) {
+        opts = '<option value="">No analysts found</option>';
+      } else {
+        opts += members.map(function(m) {
+          return '<option value="' + esc(m.name) + '">' + esc(m.name) + '</option>';
+        }).join('');
+      }
+      sel.innerHTML = opts;
     });
 
     // Close handlers
     overlay.querySelector('#crb-cancel').onclick = function() { closeModal(); };
     overlay.onclick = function(e) { if (e.target === overlay) closeModal(); };
-    document.addEventListener('keydown', function escHandler(e) {
-      if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); }
-    });
+    var escHandler = function(e) {
+      if (e.key === 'Escape') closeModal();
+    };
+    document.addEventListener('keydown', escHandler);
 
     // Submit
     overlay.querySelector('#crb-submit').onclick = function() {
@@ -692,6 +808,10 @@
       var category = overlay.querySelector('#crb-category').value;
       var notes = overlay.querySelector('#crb-notes').value;
 
+      if (!assignee) {
+        showMsg(overlay, 'Please select an analyst to assign to.', 'error');
+        return;
+      }
       if (!category) {
         showMsg(overlay, 'Please select an issue category.', 'error');
         return;
@@ -706,14 +826,15 @@
         : '[' + category + ']';
       var outcomeVal = 'Flagged for ' + assignee;
 
-      // Chain: save record FIRST, then create task
-      saveWithAudit(recordId, record, {
-        review_status: { value: 'Needs Analyst Review' },
-        escalated_to: { value: assignee },
-        review_outcome: { value: outcomeVal }
-      }, 'Escalated to ' + assignee, loginUser, fullNotes)
+      // Create task first — if it fails, the review record is untouched.
+      // If record update then fails, the duplicate check prevents re-creation on retry.
+      createApp57Task(record, recordId, assignee, loginUser, fullNotes, category)
         .then(function() {
-          return createApp57Task(record, recordId, assignee, loginUser, fullNotes);
+          return saveWithAudit(recordId, record, {
+            review_status: { value: 'Needs Analyst Review' },
+            escalated_to: { value: assignee },
+            review_outcome: { value: outcomeVal }
+          }, 'Escalated to ' + assignee, loginUser, fullNotes);
         })
         .then(function() {
           showMsg(overlay, '\u2713 Sent to ' + assignee + ' - task created!', 'success');
@@ -730,6 +851,7 @@
     };
 
     function closeModal() {
+      document.removeEventListener('keydown', escHandler);
       var el = document.getElementById('crb-escalation-modal');
       if (el) el.remove();
     }
@@ -813,7 +935,9 @@
           }
         });
       });
-      r.audit_log.value = auditLog;
+      if (r.audit_log) {
+        r.audit_log.value = auditLog;
+      }
     }
     return event;
   });
@@ -888,10 +1012,10 @@
     }) : [];
     auditLog.push({
       value: {
-        audit_action: { type: 'SINGLE_LINE_TEXT', value: action },
-        audit_user: { type: 'SINGLE_LINE_TEXT', value: user },
-        audit_timestamp: { type: 'DATETIME', value: isoTimestamp() },
-        audit_notes: { type: 'SINGLE_LINE_TEXT', value: notes || '' }
+        audit_action: { value: action },
+        audit_user: { value: user },
+        audit_timestamp: { value: isoTimestamp() },
+        audit_notes: { value: notes || '' }
       }
     });
     updates.audit_log = { value: auditLog };
@@ -912,7 +1036,27 @@
     return false;
   }
 
-  function createApp57Task(record, recordId, assignee, reviewer, notes) {
+  function closeApp57Task(sourceApp, recordId) {
+    return kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+      app: APP_57,
+      query: 'Source_App in ("' + sourceApp + '") and Source_Record_ID = "' + recordId + '" and status not in ("Complete","Canceled") limit 1',
+      fields: ['$id']
+    }).then(function(resp) {
+      if (resp.records.length === 0) return;
+      return kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+        app: APP_57,
+        id: resp.records[0].$id.value,
+        record: {
+          status: { value: 'Complete' },
+          Percent_Complete: { value: '100' }
+        }
+      });
+    }).catch(function() {
+      // Non-critical: task stays open if this fails
+    });
+  }
+
+  function createApp57Task(record, recordId, assignee, reviewer, notes, category) {
     var companyName = record.company_name ? record.company_name.value : '';
     var darbId = record.Lookup ? record.Lookup.value : '';
     var tier = record.tier ? record.tier.value : '';
@@ -945,19 +1089,24 @@
       }
 
       var generalNotes = record.general_notes ? record.general_notes.value : '';
-      var description = '<div>Tier Review escalated to ' + assignee + '<br>'
-        + companyName + ' (DARB #' + darbId + ') - Tier ' + tier + '<br>'
-        + (flaggedFields.length > 0 ? 'Flagged: ' + flaggedFields.join(' | ') + '<br>' : '')
-        + 'Reviewer: ' + reviewer + '<br>'
-        + 'Notes: ' + notes
-        + (generalNotes ? '<br>General Notes: ' + generalNotes : '')
+      var flagSummary = flaggedFields.length > 0
+        ? 'Flagged: ' + flaggedFields.map(function(f) { return esc(f); }).join(' | ') + '<br>'
+        : '';
+      var description = '<div>Tier Review escalated to ' + esc(assignee) + '<br>'
+        + esc(companyName) + ' (DARB #' + esc(darbId) + ') - Tier ' + esc(tier) + '<br>'
+        + flagSummary
+        + 'Reviewer: ' + esc(reviewer) + '<br>'
+        + 'Notes: ' + esc(notes)
+        + (generalNotes ? '<br>General Notes: ' + esc(generalNotes) : '')
         + '</div>';
+
+      var taskType = (category && CATEGORY_TO_TASK_TYPE[category]) || 'Database Maintenance';
 
       return kintone.api(kintone.api.url('/k/v1/record', true), 'POST', {
         app: APP_57,
         record: {
           Project_Name: { value: 'Tier: ' + companyName },
-          Project_Field: { value: 'Database Maintenance' },
+          Project_Field: { value: taskType },
           Task_Assignee: { value: [{ code: assignTo }] },
           Source_Record_ID: { value: String(recordId) },
           Source_App: { value: 'Tier Review (101)' },
@@ -979,7 +1128,7 @@
 
   function esc(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function todayStr() { return new Date().toISOString().split('T')[0]; }
@@ -989,5 +1138,272 @@
     d.setDate(d.getDate() + days);
     return d.toISOString().split('T')[0];
   }
+
+  // ============================================================
+  // GAMIFICATION - Leaderboard, Badges, Streaks
+  // ============================================================
+
+  const ANALYSTS = ['Peter', 'Tamara', 'Jim', 'Isaac', 'Tim', 'Anthony', 'Kyle'];
+
+  const BADGES = {
+    10: '🥉',
+    25: '🥈',
+    50: '🥇',
+    100: '💎',
+    250: '👑'
+  };
+
+  const STATUS_COLORS = {
+    'Pending': '#f3f4f6',
+    'Needs Analyst Review': '#fef3c7',
+    'Complete': '#d4edda'
+  };
+
+  async function fetchAllRecords() {
+    let allRecords = [];
+    let offset = 0;
+    const limit = 500;
+    while (true) {
+      const response = await kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+        app: kintone.app.getId(),
+        query: 'limit ' + limit + ' offset ' + offset
+      });
+      allRecords = allRecords.concat(response.records);
+      if (response.records.length < limit) break;
+      offset += limit;
+    }
+    return allRecords;
+  }
+
+  function calculateStats(records) {
+    const stats = {};
+    ANALYSTS.forEach(function(analyst) {
+      stats[analyst] = {
+        name: analyst,
+        total: 0,
+        completed: 0,
+        completedDates: []
+      };
+    });
+    records.forEach(function(record) {
+      var reviewer = record.reviewer ? record.reviewer.value : '';
+      var status = record.review_status ? record.review_status.value : '';
+      var reviewDate = record.review_date ? record.review_date.value : '';
+      if (reviewer && stats[reviewer]) {
+        stats[reviewer].total++;
+        if (status === 'Complete') {
+          stats[reviewer].completed++;
+          if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
+        }
+      }
+    });
+    ANALYSTS.forEach(function(analyst) {
+      stats[analyst].streak = calculateGamifyStreak(stats[analyst].completedDates);
+      stats[analyst].badge = getBadge(stats[analyst].completed);
+    });
+    return stats;
+  }
+
+  function calculateGamifyStreak(dates) {
+    if (dates.length === 0) return 0;
+    var sortedDates = dates
+      .map(function(d) { return new Date(d); })
+      .sort(function(a, b) { return b - a; });
+    var streak = 0;
+    var currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+    for (var i = 0; i < sortedDates.length; i++) {
+      var reviewDate = new Date(sortedDates[i]);
+      reviewDate.setHours(0, 0, 0, 0);
+      var diffDays = Math.floor((currentDate - reviewDate) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 1) {
+        streak++;
+        currentDate = reviewDate;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  function getBadge(completed) {
+    var badge = null;
+    var thresholds = Object.keys(BADGES).map(Number).sort(function(a, b) { return b - a; });
+    for (var i = 0; i < thresholds.length; i++) {
+      if (completed >= thresholds[i]) {
+        badge = BADGES[thresholds[i]];
+        break;
+      }
+    }
+    return badge;
+  }
+
+  function buildGamificationPanel(stats, allRecords) {
+    var container = document.createElement('div');
+    container.id = 'gamification-container';
+    container.style.cssText =
+      'display: flex; gap: 20px; padding: 15px;' +
+      'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);' +
+      'border-radius: 10px; margin: 10px 0; flex-wrap: wrap;';
+
+    var totalAssigned = allRecords.length;
+    var totalCompleted = allRecords.filter(function(r) {
+      return r.review_status && r.review_status.value === 'Complete';
+    }).length;
+    var completionRate = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
+
+    // Overall progress card
+    var overallCard = document.createElement('div');
+    overallCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 200px; color: white;';
+    overallCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📊 Overall Progress</h3>' +
+      '<div style="font-size: 28px; font-weight: bold; color: #4ade80;">' + completionRate + '%</div>' +
+      '<div style="font-size: 12px; color: #888;">' + totalCompleted + ' / ' + totalAssigned + ' reviews</div>' +
+      '<div style="background: #333; border-radius: 4px; height: 8px; margin-top: 10px; overflow: hidden;">' +
+      '<div style="background: linear-gradient(90deg, #4ade80, #22c55e); height: 100%; width: ' + completionRate + '%; transition: width 0.5s;"></div>' +
+      '</div>';
+    container.appendChild(overallCard);
+
+    // Leaderboard card
+    var leaderboardCard = document.createElement('div');
+    leaderboardCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 300px; color: white; flex-grow: 1;';
+
+    var sortedAnalysts = Object.values(stats)
+      .filter(function(s) { return s.total > 0; })
+      .sort(function(a, b) { return b.completed - a.completed; });
+
+    var html = '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">🏆 Leaderboard</h3>';
+    if (sortedAnalysts.length === 0) {
+      html += '<div style="color: #666;">No reviews assigned yet</div>';
+    } else {
+      html += '<table style="width: 100%; font-size: 13px; border-collapse: collapse;">';
+      html += '<tr style="color: #888; text-align: left;">' +
+        '<th style="padding: 5px 10px 5px 0;"></th>' +
+        '<th style="padding: 5px 10px;">Analyst</th>' +
+        '<th style="padding: 5px 10px;">Done</th>' +
+        '<th style="padding: 5px 10px;">Progress</th>' +
+        '<th style="padding: 5px 10px;">Streak</th></tr>';
+
+      sortedAnalysts.forEach(function(analyst, index) {
+        var progress = analyst.total > 0 ? Math.round((analyst.completed / analyst.total) * 100) : 0;
+        var medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+        var badge = analyst.badge || '';
+        var streak = analyst.streak > 0 ? '🔥' + analyst.streak : '-';
+        html +=
+          '<tr style="border-top: 1px solid rgba(255,255,255,0.1);">' +
+          '<td style="padding: 8px 10px 8px 0; font-size: 16px;">' + medal + '</td>' +
+          '<td style="padding: 8px 10px;">' + analyst.name + ' ' + badge + '</td>' +
+          '<td style="padding: 8px 10px;">' + analyst.completed + '/' + analyst.total + '</td>' +
+          '<td style="padding: 8px 10px; min-width: 100px;">' +
+          '<div style="background: #333; border-radius: 4px; height: 6px; overflow: hidden;">' +
+          '<div style="background: ' + (progress === 100 ? '#4ade80' : '#3b82f6') + '; height: 100%; width: ' + progress + '%;"></div>' +
+          '</div></td>' +
+          '<td style="padding: 8px 10px;">' + streak + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    leaderboardCard.innerHTML = html;
+    container.appendChild(leaderboardCard);
+
+    // Status breakdown card
+    var statusCard = document.createElement('div');
+    statusCard.style.cssText =
+      'background: rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; min-width: 150px; color: white;';
+    var pending = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Pending'; }).length;
+    var escalated = allRecords.filter(function(r) { return r.review_status && r.review_status.value === 'Needs Analyst Review'; }).length;
+    statusCard.innerHTML =
+      '<h3 style="margin: 0 0 10px 0; font-size: 14px; color: #aaa;">📋 Status</h3>' +
+      '<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #9ca3af;">⏳ Pending</span><span style="font-weight: bold;">' + pending + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #fbbf24;">⚠️ Escalated</span><span style="font-weight: bold;">' + escalated + '</span></div>' +
+      '<div style="display: flex; justify-content: space-between;"><span style="color: #4ade80;">✅ Complete</span><span style="font-weight: bold;">' + totalCompleted + '</span></div>' +
+      '</div>';
+    container.appendChild(statusCard);
+
+    return container;
+  }
+
+  function colorCodeRows() {
+    setTimeout(function() {
+      var rows = document.querySelectorAll('.recordlist-row-gaia');
+      rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        cells.forEach(function(cell) {
+          var text = cell.textContent ? cell.textContent.trim() : '';
+          if (STATUS_COLORS[text]) {
+            row.style.backgroundColor = STATUS_COLORS[text];
+          }
+        });
+      });
+    }, 500);
+  }
+
+  function showCelebration() {
+    var celebration = document.createElement('div');
+    celebration.style.cssText =
+      'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);' +
+      'background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);' +
+      'color: white; padding: 30px 50px; border-radius: 15px;' +
+      'font-size: 24px; font-weight: bold; z-index: 10000;' +
+      'box-shadow: 0 10px 40px rgba(0,0,0,0.3); animation: popIn 0.3s ease-out;';
+    celebration.innerHTML = '🎉 Review Complete! 🎉';
+    if (!document.getElementById('crb-popIn-anim')) {
+      var animStyle = document.createElement('style');
+      animStyle.id = 'crb-popIn-anim';
+      animStyle.textContent =
+        '@keyframes popIn {' +
+        '0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }' +
+        '100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }';
+      document.head.appendChild(animStyle);
+    }
+    document.body.appendChild(celebration);
+    setTimeout(function() {
+      celebration.style.transition = 'opacity 0.5s';
+      celebration.style.opacity = '0';
+      setTimeout(function() { celebration.remove(); }, 500);
+    }, 2000);
+  }
+
+  // Gamification - list view dashboard
+  kintone.events.on('app.record.index.show', async function(event) {
+    if (!document.getElementById('gamification-container')) {
+      var allRecords = await fetchAllRecords();
+      var stats = calculateStats(allRecords);
+      var container = buildGamificationPanel(stats, allRecords);
+      var headerSpace = kintone.app.getHeaderSpaceElement();
+      if (headerSpace) headerSpace.appendChild(container);
+    }
+    colorCodeRows();
+    return event;
+  });
+
+  // Gamification - reviewer badge on detail view
+  kintone.events.on('app.record.detail.show', function(event) {
+    var record = event.record;
+    var reviewer = record.reviewer ? record.reviewer.value : '';
+    if (!reviewer) return event;
+    var headerSpace = kintone.app.record.getHeaderMenuSpaceElement();
+    if (headerSpace && !document.getElementById('reviewer-badge')) {
+      var badgeDiv = document.createElement('div');
+      badgeDiv.id = 'reviewer-badge';
+      badgeDiv.style.cssText =
+        'background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);' +
+        'color: white; padding: 8px 15px; border-radius: 20px;' +
+        'font-size: 13px; display: inline-block;';
+      badgeDiv.textContent = '👤 Reviewer: ' + reviewer;
+      headerSpace.appendChild(badgeDiv);
+    }
+    return event;
+  });
+
+  // Gamification - celebration on completion
+  kintone.events.on(['app.record.create.submit.success', 'app.record.edit.submit.success'], function(event) {
+    var record = event.record;
+    var status = record.review_status ? record.review_status.value : '';
+    if (status === 'Complete') showCelebration();
+    return event;
+  });
 
 })();

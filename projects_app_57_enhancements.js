@@ -1,9 +1,17 @@
 /**
  * CRB Monitor - Projects/Tasks App (App 57) Enhancements
- * 
+ * Version: 1.3 - Bug fixes: closeSourceRecord awaited before reload,
+ *   isDueSoon time normalization, badge/button dedup on re-render,
+ *   .replace() regex for multi-space scope values
+ * Version: 1.2 - Removed dead code: unused CONFIG properties (DARB_APP_ID,
+ *   COLORS, 8 FIELDS entries), dead CSS classes (.crb-status-badge variants,
+ *   .crb-overdue, .crb-due-soon, .crb-btn-open-link, .crb-assignee-tag),
+ *   fixed .crb-scope-single -> .crb-scope-single-record CSS class name
+ * Version: 1.1 - Added reverse callback to update source app on task completion
+ *
  * Adds visual enhancements, status tracking, and notifications
  * for the task management system.
- * 
+ *
  * Installation:
  * 1. Go to App 57 Settings → Customization and Integration → JavaScript and CSS
  * 2. Upload this file
@@ -18,40 +26,24 @@
   // ============================================================
   
   const CONFIG = {
-    DARB_APP_ID: 23,
-    
     // Field codes in App 57 - matched to your actual field codes
     FIELDS: {
-      TASK_NAME: 'Project_Name',
-      TASK_TYPE: 'Project_Field',
-      ASSIGNEE: 'Task_Assignee',       // Assignee field
       STATUS: 'status',               // lowercase
       DUE_DATE: 'end_date',           // lowercase
-      START_DATE: 'start_date',       // lowercase
-      NOTES: 'project_description',   // lowercase
       SCOPE: 'Scope',                 // New dropdown field
       RECORD_LINK: 'Link',
       RECORD_COUNT: 'Record_Count',   // New number field
-      PERCENT_COMPLETE: 'Percent_Complete',
-      PROJECT_LEAD: 'Project_Lead',
-      COLLABORATORS: 'Collaborators'
+      SOURCE_APP: 'Source_App',       // Which app created this task
+      SOURCE_RECORD_ID: 'Source_Record_ID',
+      PERCENT_COMPLETE: 'Percent_Complete'
     },
-    
+
     // Status options
     STATUS: {
       NOT_STARTED: 'Not started - Committed',
       IN_PROGRESS: 'Ongoing',
       COMPLETE: 'Complete',
       ON_HOLD: 'On Hold'
-    },
-    
-    // Colors for visual indicators
-    COLORS: {
-      HIGH_PRIORITY: '#ef4444',
-      OVERDUE: '#ef4444',
-      DUE_SOON: '#f59e0b',
-      IN_PROGRESS: '#3b82f6',
-      COMPLETE: '#22c55e'
     }
   };
 
@@ -60,20 +52,6 @@
   // ============================================================
   
   const STYLES = `
-    /* Status badges */
-    .crb-status-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    
-    .crb-status-not-started { background: #f1f5f9; color: #64748b; }
-    .crb-status-in-progress { background: #3b82f6; color: white; }
-    .crb-status-complete { background: #22c55e; color: white; }
-    .crb-status-on-hold { background: #f59e0b; color: white; }
-    
     /* Scope badges */
     .crb-scope-badge {
       display: inline-block;
@@ -84,19 +62,24 @@
       margin-left: 8px;
     }
     
-    .crb-scope-single { background: #e8f4f8; color: #2980b9; }
+    .crb-scope-single-record { background: #e8f4f8; color: #2980b9; }
     .crb-scope-batch { background: #fef3e2; color: #d68910; }
     .crb-scope-view { background: #f5e6ff; color: #8e44ad; }
-    
-    /* Due date highlighting */
-    .crb-overdue {
-      color: #ef4444 !important;
-      font-weight: 600;
+
+    /* Source app badges */
+    .crb-source-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      margin-left: 8px;
     }
 
-    .crb-due-soon {
-      color: #f59e0b !important;
-    }
+    .crb-source-darb { background: #fef3c7; color: #92400e; }
+    .crb-source-tier { background: #dbeafe; color: #1e40af; }
+    .crb-source-ops { background: #d1fae5; color: #065f46; }
+    .crb-source-default { background: #f1f5f9; color: #64748b; }
     
     /* Quick action buttons */
     .crb-quick-actions {
@@ -135,11 +118,6 @@
       color: white;
     }
     
-    .crb-btn-open-link {
-      background: #9b59b6;
-      color: white;
-    }
-    
     /* List view row highlighting */
     .crb-row-overdue {
       background-color: #fef2f2 !important;
@@ -175,16 +153,6 @@
       text-decoration: none;
     }
     
-    /* Assignee display */
-    .crb-assignee-tag {
-      display: inline-block;
-      padding: 4px 10px;
-      background: #ecf0f1;
-      border-radius: 4px;
-      font-size: 13px;
-      margin-right: 6px;
-      margin-bottom: 4px;
-    }
   `;
 
   // ============================================================
@@ -212,7 +180,8 @@
     if (!dateStr) return false;
     const due = new Date(dateStr);
     const today = new Date();
-    const soon = new Date();
+    today.setHours(0, 0, 0, 0);
+    const soon = new Date(today);
     soon.setDate(soon.getDate() + days);
     return due >= today && due <= soon;
   }
@@ -229,6 +198,7 @@
   function addScopeBadge(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
     
     const scope = getFieldValue(record, CONFIG.FIELDS.SCOPE);
     const recordCount = getFieldValue(record, CONFIG.FIELDS.RECORD_COUNT, 1);
@@ -236,7 +206,7 @@
     if (!scope) return;
     
     const badge = document.createElement('span');
-    badge.className = `crb-scope-badge crb-scope-${scope.toLowerCase().replace(' ', '-')}`;
+    badge.className = `crb-scope-badge crb-scope-${scope.toLowerCase().replace(/ /g, '-')}`;
     
     if (scope === 'Single Record') {
       badge.textContent = '📄 Single Record';
@@ -249,22 +219,56 @@
     space.appendChild(badge);
   }
 
+  function addSourceAppBadge(record, spaceId) {
+    const space = kintone.app.record.getSpaceElement(spaceId);
+    if (!space) return;
+    space.innerHTML = '';
+
+    const sourceApp = getFieldValue(record, CONFIG.FIELDS.SOURCE_APP);
+    if (!sourceApp) return;
+
+    const badge = document.createElement('span');
+    badge.className = 'crb-source-badge';
+
+    if (sourceApp.indexOf('DARB') > -1 || sourceApp.indexOf('23') > -1) {
+      badge.className += ' crb-source-darb';
+    } else if (sourceApp.indexOf('Tier') > -1 || sourceApp.indexOf('101') > -1) {
+      badge.className += ' crb-source-tier';
+    } else if (sourceApp.indexOf('Ops') > -1 || sourceApp.indexOf('102') > -1) {
+      badge.className += ' crb-source-ops';
+    } else {
+      badge.className += ' crb-source-default';
+    }
+
+    badge.textContent = sourceApp;
+    space.appendChild(badge);
+  }
+
   function addRecordLinkButton(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
-    
+    space.innerHTML = '';
+
     const link = getFieldValue(record, CONFIG.FIELDS.RECORD_LINK);
     if (!link) return;
-    
+
+    const sourceApp = getFieldValue(record, CONFIG.FIELDS.SOURCE_APP);
+    let linkLabel = 'Open in DARB Database';
+    if (sourceApp.indexOf('Tier') > -1 || sourceApp.indexOf('101') > -1) {
+      linkLabel = 'Open in Tier Review';
+    } else if (sourceApp.indexOf('Ops') > -1 || sourceApp.indexOf('102') > -1) {
+      linkLabel = 'Open in Ops Review';
+    }
+
     const container = document.createElement('div');
     container.style.marginTop = '12px';
-    
+
     const linkBtn = document.createElement('a');
     linkBtn.className = 'crb-link-btn';
     linkBtn.href = link;
     linkBtn.target = '_blank';
-    linkBtn.innerHTML = '🔗 Open in DARB Database';
-    
+    linkBtn.textContent = '🔗 ' + linkLabel;
+
     container.appendChild(linkBtn);
     space.appendChild(container);
   }
@@ -272,6 +276,7 @@
   function addQuickActions(record, spaceId) {
     const space = kintone.app.record.getSpaceElement(spaceId);
     if (!space) return;
+    space.innerHTML = '';
     
     const status = getFieldValue(record, CONFIG.FIELDS.STATUS);
     
@@ -289,14 +294,23 @@
       startBtn.onclick = () => updateStatus(CONFIG.STATUS.IN_PROGRESS);
       container.appendChild(startBtn);
     }
-    
+
+    // Resume button (if on hold)
+    if (status === CONFIG.STATUS.ON_HOLD) {
+      const resumeBtn = document.createElement('button');
+      resumeBtn.className = 'crb-action-btn crb-btn-start';
+      resumeBtn.innerHTML = '▶️ Resume Task';
+      resumeBtn.onclick = () => updateStatus(CONFIG.STATUS.IN_PROGRESS);
+      container.appendChild(resumeBtn);
+    }
+
     // Complete button
     const completeBtn = document.createElement('button');
     completeBtn.className = 'crb-action-btn crb-btn-complete';
     completeBtn.innerHTML = '✓ Mark Complete';
     completeBtn.onclick = () => updateStatus(CONFIG.STATUS.COMPLETE);
     container.appendChild(completeBtn);
-    
+
     // Hold button (if in progress)
     if (status === CONFIG.STATUS.IN_PROGRESS) {
       const holdBtn = document.createElement('button');
@@ -307,6 +321,48 @@
     }
     
     space.appendChild(container);
+  }
+
+  // Reverse callback - when a task completes in App 57, update the
+  // originating record in the source app to reflect completion
+  function closeSourceRecord() {
+    var currentRecord = kintone.app.record.get();
+    if (!currentRecord || !currentRecord.record) return;
+
+    var sourceApp = getFieldValue(currentRecord.record, CONFIG.FIELDS.SOURCE_APP);
+    var sourceRecordId = getFieldValue(currentRecord.record, CONFIG.FIELDS.SOURCE_RECORD_ID);
+
+    // Manual task with no source - nothing to update
+    if (!sourceApp || !sourceRecordId) return;
+
+    // Map Source_App dropdown value to numeric app ID
+    var sourceAppId;
+    if (sourceApp === 'Tier Review (101)') {
+      sourceAppId = 101;
+    } else if (sourceApp === 'Ops Review (102)') {
+      sourceAppId = 102;
+    } else if (sourceApp === 'DARB (23)') {
+      // App 23 does not have review_status - skip update
+      return;
+    } else {
+      return;
+    }
+
+    var todayStr = new Date().toISOString().split('T')[0];
+
+    // Update the source record
+    return kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', {
+      app: sourceAppId,
+      id: sourceRecordId,
+      record: {
+        review_status: { value: 'Complete' },
+        review_outcome: { value: 'Analyst Reviewed' },
+        review_date: { value: todayStr }
+      }
+    }).catch(function(error) {
+      console.log('closeSourceRecord - failed to update source app ' + sourceAppId +
+        ' record ' + sourceRecordId + ': ' + error.message);
+    });
   }
 
   async function updateStatus(newStatus) {
@@ -329,16 +385,13 @@
     
     try {
       await kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', body);
-      
-      if (typeof kintone.showNotification === 'function') {
-        kintone.showNotification({
-          text: `Status updated to: ${newStatus}`,
-          type: 'success'
-        });
-      } else {
-        alert(`Status updated to: ${newStatus}`);
+
+      // If task is now complete, update the source app record before reloading
+      if (newStatus === CONFIG.STATUS.COMPLETE) {
+        await closeSourceRecord();
       }
-      
+
+      alert(`Status updated to: ${newStatus}`);
       location.reload();
     } catch (error) {
       alert('Error updating status: ' + error.message);
@@ -390,6 +443,7 @@
     injectStyles();
     
     // Add visual enhancements (create these space elements in your form)
+    addSourceAppBadge(record, 'source_app_space');
     addScopeBadge(record, 'scope_badge_space');
     addRecordLinkButton(record, 'record_link_space');
     addQuickActions(record, 'quick_actions_space');
@@ -414,7 +468,7 @@
     
     // Set default status
     if (CONFIG.FIELDS.STATUS && record[CONFIG.FIELDS.STATUS]) {
-      if (!record[CONFIG.FIELDS.STATUS].value || record[CONFIG.FIELDS.STATUS].value === 'Unprocessed') {
+      if (!record[CONFIG.FIELDS.STATUS].value) {
         record[CONFIG.FIELDS.STATUS].value = CONFIG.STATUS.NOT_STARTED;
       }
     }
