@@ -59,10 +59,13 @@
   }
 
   var ISSUE_CATEGORIES = [
-    'Data Mismatch',
-    'Missing Information',
-    'Source Discrepancy',
-    'Company Record Issue',
+    'Securities / Ticker Mismatch',
+    'Exchange or Domicile Error',
+    'AUM / Expense Data Error',
+    'Missing or Broken Source Links',
+    'Company Profile Incomplete',
+    'Holdings / BCBS Discrepancy',
+    'ETP Provider / Custodian Issue',
     'Needs Further Research'
   ];
 
