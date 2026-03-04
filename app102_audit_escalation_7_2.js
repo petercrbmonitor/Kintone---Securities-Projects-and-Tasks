@@ -69,6 +69,15 @@
     'Needs Further Research'
   ];
 
+  // Resolution checkbox options (must match Kintone field: resolution)
+  var RESOLUTION_OPTIONS = [
+    'No Changes Required',
+    'Official Name Updated',
+    'Tickers/Exchanges Updated',
+    'CUSIP/ISIN Updated',
+    'Source Links Added/Removed'
+  ];
+
   // ============================================================
   // STYLES
   // ============================================================
@@ -218,6 +227,31 @@
     }\
     .crb-modal-btn-secondary:hover { background: #f0f0f0; }\
     .crb-modal-btn:disabled { opacity: 0.6; cursor: not-allowed; }\
+    .crb-checkbox-group {\
+      display: flex;\
+      flex-direction: column;\
+      gap: 6px;\
+      margin-top: 4px;\
+    }\
+    .crb-checkbox-item {\
+      display: flex;\
+      align-items: center;\
+      gap: 8px;\
+      padding: 6px 10px;\
+      border-radius: 6px;\
+      cursor: pointer;\
+      font-size: 13px;\
+      color: #334155;\
+      transition: background 0.15s;\
+    }\
+    .crb-checkbox-item:hover { background: #f1f5f9; }\
+    .crb-checkbox-item input[type="checkbox"] {\
+      width: 16px;\
+      height: 16px;\
+      accent-color: #22c55e;\
+      cursor: pointer;\
+    }\
+    .crb-checkbox-item.crb-checked { background: #f0fdf4; font-weight: 500; }\
     .crb-message {\
       padding: 10px 14px;\
       border-radius: 6px;\
@@ -329,6 +363,7 @@
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
     kintone.app.record.setFieldShown('escalated_to', false);
+    kintone.app.record.setFieldShown('resolution', false);
     if (!headerEl || document.getElementById('crb-102-action-bar')) return event;
 
     // Helper: is this a "completed" status? Handles legacy values like "Complete - No Issues"
@@ -364,24 +399,7 @@
       completeBtn.className = 'crb-action-btn crb-btn-complete';
       completeBtn.textContent = '\u2713 Complete';
       completeBtn.onclick = function() {
-        // Enhancement 1: Confirmation modal
-        openConfirmModal({
-          title: 'Confirm Complete',
-          subtitle: companyName + ' (DARB #' + darbId + ')',
-          headerColor: 'linear-gradient(135deg, #22c55e, #16a34a)',
-          outcomePreview: 'Review completed - no issues found',
-          confirmLabel: '\u2713 Complete Review',
-          confirmColor: '#22c55e',
-          onConfirm: function() {
-            return saveWithAudit(recordId, r, {
-              review_status: { value: 'Complete' },
-              review_date: { value: todayStr() }
-            }, 'Status: Complete', loginUser, 'Review completed')
-              .then(function() {
-                navigateToNextPending(recordId);
-              });
-          }
-        });
+        openResolutionModal(companyName, darbId, recordId, r, loginUser);
       };
       bar.appendChild(completeBtn);
 
@@ -525,6 +543,115 @@
           }
         });
       }
+    };
+  }
+
+  // ============================================================
+  // RESOLUTION MODAL (Complete with checkbox selection)
+  // ============================================================
+
+  function openResolutionModal(companyName, darbId, recordId, record, loginUser) {
+    var overlay = document.createElement('div');
+    overlay.id = 'crb-confirm-modal';
+    overlay.className = 'crb-modal-overlay';
+
+    var checkboxHtml = '<div class="crb-checkbox-group">';
+    for (var i = 0; i < RESOLUTION_OPTIONS.length; i++) {
+      var opt = RESOLUTION_OPTIONS[i];
+      checkboxHtml += '<label class="crb-checkbox-item">'
+        + '<input type="checkbox" name="crb-resolution" value="' + esc(opt) + '"'
+        + (opt === 'No Changes Required' ? ' data-exclusive="true"' : '')
+        + '> ' + esc(opt) + '</label>';
+    }
+    checkboxHtml += '</div>';
+
+    overlay.innerHTML = '\
+      <div class="crb-modal" style="width:420px;">\
+        <div class="crb-modal-header" style="background:linear-gradient(135deg, #22c55e, #16a34a);">\
+          <h3>Complete Review</h3>\
+          <div class="crb-modal-sub">' + esc(companyName) + ' (DARB #' + esc(darbId) + ')</div>\
+        </div>\
+        <div class="crb-modal-body">\
+          <div id="crb-confirm-msg" class="crb-message"></div>\
+          <div class="crb-form-group">\
+            <label>What was resolved?</label>\
+            ' + checkboxHtml + '\
+          </div>\
+        </div>\
+        <div class="crb-modal-footer">\
+          <button class="crb-modal-btn crb-modal-btn-secondary" id="crb-confirm-cancel">Cancel</button>\
+          <button class="crb-modal-btn crb-modal-btn-primary" id="crb-confirm-ok" style="background:#22c55e;">\u2713 Complete Review</button>\
+        </div>\
+      </div>';
+
+    document.body.appendChild(overlay);
+
+    // "No Changes Required" is exclusive — unchecks others and vice versa
+    var checkboxes = overlay.querySelectorAll('input[name="crb-resolution"]');
+    for (var c = 0; c < checkboxes.length; c++) {
+      checkboxes[c].addEventListener('change', function(e) {
+        var isExclusive = e.target.getAttribute('data-exclusive') === 'true';
+        if (isExclusive && e.target.checked) {
+          for (var j = 0; j < checkboxes.length; j++) {
+            if (checkboxes[j] !== e.target) checkboxes[j].checked = false;
+          }
+        } else if (!isExclusive && e.target.checked) {
+          // Uncheck "No Changes Required" when any change option is checked
+          for (var k = 0; k < checkboxes.length; k++) {
+            if (checkboxes[k].getAttribute('data-exclusive') === 'true') checkboxes[k].checked = false;
+          }
+        }
+        // Update highlight classes
+        for (var h = 0; h < checkboxes.length; h++) {
+          checkboxes[h].parentElement.className = 'crb-checkbox-item' + (checkboxes[h].checked ? ' crb-checked' : '');
+        }
+      });
+    }
+
+    // Close handlers
+    overlay.querySelector('#crb-confirm-cancel').onclick = function() { overlay.remove(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    document.addEventListener('keydown', function escH(e) {
+      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escH); }
+    });
+
+    // Submit
+    overlay.querySelector('#crb-confirm-ok').onclick = function() {
+      var selected = [];
+      for (var s = 0; s < checkboxes.length; s++) {
+        if (checkboxes[s].checked) selected.push(checkboxes[s].value);
+      }
+      if (selected.length === 0) {
+        var msgEl = overlay.querySelector('#crb-confirm-msg');
+        msgEl.className = 'crb-message crb-message-error show';
+        msgEl.textContent = 'Please select at least one resolution.';
+        return;
+      }
+
+      var btn = overlay.querySelector('#crb-confirm-ok');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      var auditNotes = selected.join(', ');
+
+      saveWithAudit(recordId, record, {
+        review_status: { value: 'Complete' },
+        review_date: { value: todayStr() },
+        resolution: { value: selected }
+      }, 'Status: Complete', loginUser, auditNotes)
+        .then(function() {
+          overlay.remove();
+          navigateToNextPending(recordId);
+        })
+        .catch(function(e) {
+          btn.disabled = false;
+          btn.textContent = '\u2713 Complete Review';
+          var msgEl = overlay.querySelector('#crb-confirm-msg');
+          if (msgEl) {
+            msgEl.className = 'crb-message crb-message-error show';
+            msgEl.textContent = 'Save failed: ' + (e.message || e);
+          }
+        });
     };
   }
 
@@ -683,6 +810,7 @@
     // Hide redundant fields - action buttons handle these
     kintone.app.record.setFieldShown('review_status', false);
     kintone.app.record.setFieldShown('escalated_to', false);
+    kintone.app.record.setFieldShown('resolution', false);
 
     return event;
   });
