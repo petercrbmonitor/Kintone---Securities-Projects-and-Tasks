@@ -115,40 +115,32 @@
   // ============================================================
 
   const TASK_TEMPLATES = {
-    changes: [
-      { name: 'Possible Removal', type: 'Tier/Profile Reviews', prefix: 'Possible Removal: ' },
-      { name: 'Sector Change', type: 'Kintone', prefix: 'Sector Change: ' },
-      { name: 'Tier Change', type: 'Tier/Profile Reviews', prefix: 'Tier Change: ' },
-      { name: 'Add Source Documents', type: 'Research', prefix: 'Add Source Docs: ' },
+    review: [
+      { name: 'Securities/CUSIP/ISIN', type: 'Database Maintenance', prefix: 'ID Check: ' },
+      { name: 'Pure-Play', type: 'Tier/Profile Reviews', prefix: 'Pure-Play Review: ' },
+      { name: 'Tier', type: 'Tier/Profile Reviews', prefix: 'Tier Review: ' },
+      { name: 'Sector', type: 'Kintone', prefix: 'Sector Review: ' },
       { name: 'Name Change', type: 'Kintone', prefix: 'Name Change: ' },
-      { name: 'Security Change', type: 'Database Maintenance', prefix: 'Security Change: ' }
+      { name: 'Security Status', type: 'Database Maintenance', prefix: 'Security Status: ' },
+      { name: 'Pre-IPO', type: 'Research', prefix: 'Pre-IPO: ' },
+      { name: 'Business Description', type: 'Research', prefix: 'Biz Desc Review: ' },
+      { name: 'Inclusion Rationale', type: 'Tier/Profile Reviews', prefix: 'Inclusion Rationale: ' }
     ],
-    core: [
-      { name: 'Review Profile', type: 'Tier/Profile Reviews', prefix: 'Review: ' },
-      { name: 'Update Data', type: 'Kintone', prefix: 'Update: ' },
-      { name: 'Verify Info', type: 'Kintone', prefix: 'Verify: ' },
-      { name: 'Clean Data', type: 'Database Maintenance', prefix: 'Clean: ' },
-      { name: 'Research', type: 'Research', prefix: 'Research: ' },
-      { name: 'Fix Error', type: 'Database Maintenance', prefix: 'Fix: ' }
+    include: [
+      { name: 'Possible Inclusion', type: 'Tier/Profile Reviews', prefix: 'Possible Inclusion: ' },
+      { name: 'Approved for Inclusion', type: 'Tier/Profile Reviews', prefix: 'Approved for Inclusion: ' }
     ],
-    securities: [
-      { name: 'CUSIP/ISIN Check', type: 'Database Maintenance', prefix: 'ID Check: ' },
-      { name: 'Pre-IPO Review', type: 'Research', prefix: 'Pre-IPO: ' },
-      { name: 'Tier Review', type: 'Tier/Profile Reviews', prefix: 'Tier: ' },
-      { name: 'Regulatory Check', type: 'Research', prefix: 'Reg Check: ' }
-    ],
-    process: [
-      { name: 'Client Request', type: 'Client Requests', prefix: '' },
-      { name: 'Weekly Update', type: 'Weekly Process', prefix: '' }
+    exclude: [
+      { name: 'Possible Exclusion', type: 'Tier/Profile Reviews', prefix: 'Possible Exclusion: ' },
+      { name: 'Confirmed for Exclusion', type: 'Tier/Profile Reviews', prefix: 'Confirmed for Exclusion: ' }
     ]
   };
 
   // Template group display labels and background tints
   var TEMPLATE_GROUP_META = {
-    changes: { label: 'Quick Select', tint: '#fef3c7' },
-    core: { label: 'Core', tint: '#f0fdf9' },
-    securities: { label: 'Securities', tint: '#f0f9ff' },
-    process: { label: 'Process', tint: '#fdf8f0' }
+    review: { label: 'Review', tint: '#f0f9ff' },
+    include: { label: 'Include', tint: '#f0fdf9' },
+    exclude: { label: 'Exclude', tint: '#fef3c7' }
   };
 
   // ============================================================

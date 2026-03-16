@@ -30,14 +30,30 @@
 
 ## Quick Templates
 
+**Review**
 | Click | Creates |
 |-------|---------|
-| Review Profile | "Review: [Company]" |
-| Update Data | "Update: [Company]" |
-| Fix Error | "Fix: [Company]" |
-| Clean Data | "Clean: [Company]" |
-| Verify Info | "Verify: [Company]" |
-| Research | "Research: [Company]" |
+| Securities/CUSIP/ISIN | "ID Check: [Company]" |
+| Pure-Play | "Pure-Play Review: [Company]" |
+| Tier | "Tier Review: [Company]" |
+| Sector | "Sector Review: [Company]" |
+| Name Change | "Name Change: [Company]" |
+| Security Status | "Security Status: [Company]" |
+| Pre-IPO | "Pre-IPO: [Company]" |
+| Business Description | "Biz Desc Review: [Company]" |
+| Inclusion Rationale | "Inclusion Rationale: [Company]" |
+
+**Include**
+| Click | Creates |
+|-------|---------|
+| Possible Inclusion | "Possible Inclusion: [Company]" |
+| Approved for Inclusion | "Approved for Inclusion: [Company]" |
+
+**Exclude**
+| Click | Creates |
+|-------|---------|
+| Possible Exclusion | "Possible Exclusion: [Company]" |
+| Confirmed for Exclusion | "Confirmed for Exclusion: [Company]" |
 
 ---
 
