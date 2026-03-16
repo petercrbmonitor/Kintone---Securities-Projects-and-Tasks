@@ -45,7 +45,8 @@
       SECTOR: 'Drop_down_3',
       PURE_PLAY: 'Drop_down_18',
       DOMICILE: 'Text_32',
-      LAST_TIER_REVIEW: 'Date_9'
+      LAST_TIER_REVIEW: 'Date_9',
+      JF_CONFIRM_STATUS: 'Drop_down_27'
     },
 
     // Auto-review round-robin assignment pools
@@ -961,7 +962,34 @@
           recordName: recordName,
           recordUrl: recordUrl,
           isBulk: false,
-          onSubmit: createTask
+          onSubmit: function(taskData) {
+            return createTask(taskData).then(function(taskId) {
+              // Update Drop_down_27 when current value is "JF to Confirm Active - New Profiles"
+              var jfStatus = record[CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS];
+              if (jfStatus && jfStatus.value === 'JF to Confirm Active - New Profiles') {
+                var newValue = null;
+                if (taskData.taskName.indexOf('Approved for Inclusion: ') === 0) {
+                  newValue = 'JF Approved Active';
+                } else if (taskData.taskName.indexOf('Confirmed for Exclusion: ') === 0) {
+                  newValue = 'JF Approved Inactive';
+                }
+                if (newValue) {
+                  return kintone.api(
+                    kintone.api.url('/k/v1/record', true),
+                    'PUT',
+                    {
+                      app: CONFIG.DARB_APP_ID,
+                      id: recordId,
+                      record: {
+                        [CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS]: { value: newValue }
+                      }
+                    }
+                  ).then(function() { return taskId; });
+                }
+              }
+              return taskId;
+            });
+          }
         });
       };
 
