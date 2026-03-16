@@ -45,7 +45,8 @@
       SECTOR: 'Drop_down_3',
       PURE_PLAY: 'Drop_down_18',
       DOMICILE: 'Text_32',
-      LAST_TIER_REVIEW: 'Date_9'
+      LAST_TIER_REVIEW: 'Date_9',
+      JF_CONFIRM_STATUS: 'Drop_down_27'
     },
 
     // Auto-review round-robin assignment pools
@@ -78,16 +79,7 @@
 
     // Task type options (consolidated list)
     TASK_TYPES: [
-      'Kintone',
-      'Documentation',
-      'Client Requests',
-      'Daily Process',
-      'Weekly Process',
-      'Database Maintenance',
-      'Tier/Profile Reviews',
-      'Research',
-      'BCBS Data',
-      'VASPs'
+      'Securities Review'
     ],
 
     // Team members - Kintone cloud login codes ARE the full email addresses.
@@ -107,7 +99,7 @@
     AUTHORIZED_GROUPS: ['Research', 'Research Admins'],
 
     // Default values
-    DEFAULT_DUE_DAYS: 7
+    DEFAULT_DUE_DAYS: 0
   };
 
   // ============================================================
@@ -115,40 +107,32 @@
   // ============================================================
 
   const TASK_TEMPLATES = {
-    changes: [
-      { name: 'Possible Removal', type: 'Tier/Profile Reviews', prefix: 'Possible Removal: ' },
-      { name: 'Sector Change', type: 'Kintone', prefix: 'Sector Change: ' },
-      { name: 'Tier Change', type: 'Tier/Profile Reviews', prefix: 'Tier Change: ' },
-      { name: 'Add Source Documents', type: 'Research', prefix: 'Add Source Docs: ' },
-      { name: 'Name Change', type: 'Kintone', prefix: 'Name Change: ' },
-      { name: 'Security Change', type: 'Database Maintenance', prefix: 'Security Change: ' }
+    review: [
+      { name: 'Securities/CUSIP/ISIN', type: 'Securities Review', prefix: 'ID Check: ' },
+      { name: 'Pure-Play', type: 'Securities Review', prefix: 'Pure-Play Review: ' },
+      { name: 'Tier', type: 'Securities Review', prefix: 'Tier Review: ' },
+      { name: 'Sector', type: 'Securities Review', prefix: 'Sector Review: ' },
+      { name: 'Name Change', type: 'Securities Review', prefix: 'Name Change: ' },
+      { name: 'Security Status', type: 'Securities Review', prefix: 'Security Status: ' },
+      { name: 'Pre-IPO', type: 'Securities Review', prefix: 'Pre-IPO: ' },
+      { name: 'Business Description', type: 'Securities Review', prefix: 'Biz Desc Review: ' },
+      { name: 'Inclusion Rationale', type: 'Securities Review', prefix: 'Inclusion Rationale: ' }
     ],
-    core: [
-      { name: 'Review Profile', type: 'Tier/Profile Reviews', prefix: 'Review: ' },
-      { name: 'Update Data', type: 'Kintone', prefix: 'Update: ' },
-      { name: 'Verify Info', type: 'Kintone', prefix: 'Verify: ' },
-      { name: 'Clean Data', type: 'Database Maintenance', prefix: 'Clean: ' },
-      { name: 'Research', type: 'Research', prefix: 'Research: ' },
-      { name: 'Fix Error', type: 'Database Maintenance', prefix: 'Fix: ' }
+    include: [
+      { name: 'Possible Inclusion', type: 'Securities Review', prefix: 'Possible Inclusion: ' },
+      { name: 'Approved for Inclusion', type: 'Securities Review', prefix: 'Approved for Inclusion: ' }
     ],
-    securities: [
-      { name: 'CUSIP/ISIN Check', type: 'Database Maintenance', prefix: 'ID Check: ' },
-      { name: 'Pre-IPO Review', type: 'Research', prefix: 'Pre-IPO: ' },
-      { name: 'Tier Review', type: 'Tier/Profile Reviews', prefix: 'Tier: ' },
-      { name: 'Regulatory Check', type: 'Research', prefix: 'Reg Check: ' }
-    ],
-    process: [
-      { name: 'Client Request', type: 'Client Requests', prefix: '' },
-      { name: 'Weekly Update', type: 'Weekly Process', prefix: '' }
+    exclude: [
+      { name: 'Possible Exclusion', type: 'Securities Review', prefix: 'Possible Exclusion: ' },
+      { name: 'Confirmed for Exclusion', type: 'Securities Review', prefix: 'Confirmed for Exclusion: ' }
     ]
   };
 
   // Template group display labels and background tints
   var TEMPLATE_GROUP_META = {
-    changes: { label: 'Quick Select', tint: '#fef3c7' },
-    core: { label: 'Core', tint: '#f0fdf9' },
-    securities: { label: 'Securities', tint: '#f0f9ff' },
-    process: { label: 'Process', tint: '#fdf8f0' }
+    review: { label: 'Review', tint: '#f0f9ff' },
+    include: { label: 'Include', tint: '#f0fdf9' },
+    exclude: { label: 'Exclude', tint: '#fef3c7' }
   };
 
   // ============================================================
@@ -483,8 +467,6 @@
   /**
    * Computes the quick-select date options.
    * Each returns { label, shortDate, isoDate }.
-   * "Friday" returns next Friday (if today is Friday, it returns next week's Friday).
-   * "End of Month" returns the last day of the current month.
    */
   function getQuickDateOptions() {
     var today = new Date();
@@ -510,27 +492,14 @@
       return months[d.getMonth()] + ' ' + d.getDate();
     }
 
-    // Next Friday: if today is Friday (5), go to next Friday (+7)
-    var dayOfWeek = today.getDay(); // 0=Sun, 5=Fri
-    var daysUntilFri = (5 - dayOfWeek + 7) % 7;
-    if (daysUntilFri === 0) daysUntilFri = 7; // today is Friday -> next Friday
-    var friday = addDays(today, daysUntilFri);
-
-    // End of month: last day of current month
-    var endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-
     var todayDate = today;
     var tomorrowDate = addDays(today, 1);
-    var plus3Date = addDays(today, 3);
     var plus7Date = addDays(today, 7);
 
     return [
       { key: 'today',    label: 'Today',       shortDate: shortDate(todayDate),     isoDate: toISO(todayDate) },
       { key: 'tomorrow', label: 'Tomorrow',    shortDate: shortDate(tomorrowDate),  isoDate: toISO(tomorrowDate) },
-      { key: 'plus3',    label: '+3 Days',     shortDate: shortDate(plus3Date),     isoDate: toISO(plus3Date) },
-      { key: 'friday',   label: 'Friday',      shortDate: shortDate(friday),        isoDate: toISO(friday) },
-      { key: 'plus7',    label: '+1 Week',     shortDate: shortDate(plus7Date),     isoDate: toISO(plus7Date) },
-      { key: 'eom',      label: 'End of Month', shortDate: shortDate(endOfMonth),   isoDate: toISO(endOfMonth) }
+      { key: 'plus7',    label: '+1 Week',     shortDate: shortDate(plus7Date),     isoDate: toISO(plus7Date) }
     ];
   }
 
@@ -621,8 +590,8 @@
     var datePillsHtml = '';
     for (var di = 0; di < dateOptions.length; di++) {
       var opt = dateOptions[di];
-      // Default selection: +1 Week (key === 'plus7')
-      var activeClass = opt.key === 'plus7' ? ' active' : '';
+      // Default selection: Today
+      var activeClass = opt.key === 'today' ? ' active' : '';
       datePillsHtml += '<button type="button" class="crb-date-pill' + activeClass + '" ' +
         'data-date="' + opt.isoDate + '">' +
         '<span class="crb-date-pill-label">' + opt.label + '</span>' +
@@ -978,7 +947,34 @@
           recordName: recordName,
           recordUrl: recordUrl,
           isBulk: false,
-          onSubmit: createTask
+          onSubmit: function(taskData) {
+            return createTask(taskData).then(function(taskId) {
+              // Update Drop_down_27 when current value is "JF to Confirm Active - New Profiles"
+              var jfStatus = record[CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS];
+              if (jfStatus && jfStatus.value === 'JF to Confirm Active - New Profiles') {
+                var newValue = null;
+                if (taskData.taskName.indexOf('Approved for Inclusion: ') === 0) {
+                  newValue = 'JF Approved Active';
+                } else if (taskData.taskName.indexOf('Confirmed for Exclusion: ') === 0) {
+                  newValue = 'JF Approved Inactive';
+                }
+                if (newValue) {
+                  return kintone.api(
+                    kintone.api.url('/k/v1/record', true),
+                    'PUT',
+                    {
+                      app: CONFIG.DARB_APP_ID,
+                      id: recordId,
+                      record: {
+                        [CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS]: { value: newValue }
+                      }
+                    }
+                  ).then(function() { return taskId; });
+                }
+              }
+              return taskId;
+            });
+          }
         });
       };
 
@@ -1015,7 +1011,8 @@
       button.onclick = function() {
         if (document.getElementById('crb-task-overlay')) return;
         var viewUrl = getCurrentViewUrl();
-        var recordCount = event.records ? event.records.length : 0;
+        var viewRecords = event.records || [];
+        var recordCount = viewRecords.length;
         var viewName = event.viewName || 'Current View';
 
         createTaskModal({
@@ -1025,7 +1022,55 @@
           isBulk: true,
           viewUrl: viewUrl,
           recordCount: recordCount,
-          onSubmit: createTask
+          onSubmit: function(taskData) {
+            return createTask(taskData).then(function(taskId) {
+              // Bulk-update Drop_down_27 for all view records where value is "JF to Confirm Active - New Profiles"
+              var newValue = null;
+              if (taskData.taskName.indexOf('Approved for Inclusion: ') === 0) {
+                newValue = 'JF Approved Active';
+              } else if (taskData.taskName.indexOf('Confirmed for Exclusion: ') === 0) {
+                newValue = 'JF Approved Inactive';
+              }
+              if (!newValue) return taskId;
+
+              var idsToUpdate = [];
+              for (var ri = 0; ri < viewRecords.length; ri++) {
+                var rec = viewRecords[ri];
+                var jfVal = rec[CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS];
+                if (jfVal && jfVal.value === 'JF to Confirm Active - New Profiles') {
+                  idsToUpdate.push(rec.$id.value);
+                }
+              }
+              if (idsToUpdate.length === 0) return taskId;
+
+              // Kintone bulk PUT supports up to 100 records at a time
+              var batches = [];
+              for (var bi = 0; bi < idsToUpdate.length; bi += 100) {
+                batches.push(idsToUpdate.slice(bi, bi + 100));
+              }
+
+              var chain = Promise.resolve();
+              batches.forEach(function(batch) {
+                chain = chain.then(function() {
+                  var records = batch.map(function(id) {
+                    return {
+                      id: id,
+                      record: {
+                        [CONFIG.DARB_FIELDS.JF_CONFIRM_STATUS]: { value: newValue }
+                      }
+                    };
+                  });
+                  return kintone.api(
+                    kintone.api.url('/k/v1/records', true),
+                    'PUT',
+                    { app: CONFIG.DARB_APP_ID, records: records }
+                  );
+                });
+              });
+
+              return chain.then(function() { return taskId; });
+            });
+          }
         });
       };
 

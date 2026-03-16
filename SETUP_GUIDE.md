@@ -300,16 +300,32 @@ Create and save filtered views that you'll reference in tasks:
 
 ## Quick Task Templates
 
-The modal includes quick templates for common tasks:
+The modal includes three template categories:
 
+**Review**
 | Template | Prefix | Type |
 |----------|--------|------|
-| Review Profile | "Review: " | Review |
-| Update Data | "Update: " | Update |
-| Verify Info | "Verify: " | Verification |
-| Clean Data | "Clean: " | Data Clean |
-| Research | "Research: " | Research |
-| Fix Error | "Fix: " | Data Clean |
+| Securities/CUSIP/ISIN | "ID Check: " | Database Maintenance |
+| Pure-Play | "Pure-Play Review: " | Tier/Profile Reviews |
+| Tier | "Tier Review: " | Tier/Profile Reviews |
+| Sector | "Sector Review: " | Kintone |
+| Name Change | "Name Change: " | Kintone |
+| Security Status | "Security Status: " | Database Maintenance |
+| Pre-IPO | "Pre-IPO: " | Research |
+| Business Description | "Biz Desc Review: " | Research |
+| Inclusion Rationale | "Inclusion Rationale: " | Tier/Profile Reviews |
+
+**Include**
+| Template | Prefix | Type |
+|----------|--------|------|
+| Possible Inclusion | "Possible Inclusion: " | Tier/Profile Reviews |
+| Approved for Inclusion | "Approved for Inclusion: " | Tier/Profile Reviews |
+
+**Exclude**
+| Template | Prefix | Type |
+|----------|--------|------|
+| Possible Exclusion | "Possible Exclusion: " | Tier/Profile Reviews |
+| Confirmed for Exclusion | "Confirmed for Exclusion: " | Tier/Profile Reviews |
 
 Click a template to pre-fill the task name and type.
 
@@ -370,4 +386,4 @@ To add/remove team members, edit the `TEAM_MEMBERS` array in `darb_app_23_task_b
 
 ---
 
-*Last Updated: January 2026*
+*Last Updated: March 2026*
