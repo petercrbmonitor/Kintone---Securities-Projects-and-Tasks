@@ -78,16 +78,7 @@
 
     // Task type options (consolidated list)
     TASK_TYPES: [
-      'Kintone',
-      'Documentation',
-      'Client Requests',
-      'Daily Process',
-      'Weekly Process',
-      'Database Maintenance',
-      'Tier/Profile Reviews',
-      'Research',
-      'BCBS Data',
-      'VASPs'
+      'Securities Review'
     ],
 
     // Team members - Kintone cloud login codes ARE the full email addresses.
@@ -116,23 +107,23 @@
 
   const TASK_TEMPLATES = {
     review: [
-      { name: 'Securities/CUSIP/ISIN', type: 'Database Maintenance', prefix: 'ID Check: ' },
-      { name: 'Pure-Play', type: 'Tier/Profile Reviews', prefix: 'Pure-Play Review: ' },
-      { name: 'Tier', type: 'Tier/Profile Reviews', prefix: 'Tier Review: ' },
-      { name: 'Sector', type: 'Kintone', prefix: 'Sector Review: ' },
-      { name: 'Name Change', type: 'Kintone', prefix: 'Name Change: ' },
-      { name: 'Security Status', type: 'Database Maintenance', prefix: 'Security Status: ' },
-      { name: 'Pre-IPO', type: 'Research', prefix: 'Pre-IPO: ' },
-      { name: 'Business Description', type: 'Research', prefix: 'Biz Desc Review: ' },
-      { name: 'Inclusion Rationale', type: 'Tier/Profile Reviews', prefix: 'Inclusion Rationale: ' }
+      { name: 'Securities/CUSIP/ISIN', type: 'Securities Review', prefix: 'ID Check: ' },
+      { name: 'Pure-Play', type: 'Securities Review', prefix: 'Pure-Play Review: ' },
+      { name: 'Tier', type: 'Securities Review', prefix: 'Tier Review: ' },
+      { name: 'Sector', type: 'Securities Review', prefix: 'Sector Review: ' },
+      { name: 'Name Change', type: 'Securities Review', prefix: 'Name Change: ' },
+      { name: 'Security Status', type: 'Securities Review', prefix: 'Security Status: ' },
+      { name: 'Pre-IPO', type: 'Securities Review', prefix: 'Pre-IPO: ' },
+      { name: 'Business Description', type: 'Securities Review', prefix: 'Biz Desc Review: ' },
+      { name: 'Inclusion Rationale', type: 'Securities Review', prefix: 'Inclusion Rationale: ' }
     ],
     include: [
-      { name: 'Possible Inclusion', type: 'Tier/Profile Reviews', prefix: 'Possible Inclusion: ' },
-      { name: 'Approved for Inclusion', type: 'Tier/Profile Reviews', prefix: 'Approved for Inclusion: ' }
+      { name: 'Possible Inclusion', type: 'Securities Review', prefix: 'Possible Inclusion: ' },
+      { name: 'Approved for Inclusion', type: 'Securities Review', prefix: 'Approved for Inclusion: ' }
     ],
     exclude: [
-      { name: 'Possible Exclusion', type: 'Tier/Profile Reviews', prefix: 'Possible Exclusion: ' },
-      { name: 'Confirmed for Exclusion', type: 'Tier/Profile Reviews', prefix: 'Confirmed for Exclusion: ' }
+      { name: 'Possible Exclusion', type: 'Securities Review', prefix: 'Possible Exclusion: ' },
+      { name: 'Confirmed for Exclusion', type: 'Securities Review', prefix: 'Confirmed for Exclusion: ' }
     ]
   };
 
