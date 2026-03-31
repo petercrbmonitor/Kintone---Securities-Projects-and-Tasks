@@ -82,17 +82,10 @@
       'Securities Review'
     ],
 
-    // Team members - Kintone cloud login codes ARE the full email addresses.
-    // The API payload key is "code" but the value must be the email/login name.
-    TEAM_MEMBERS: [
-      { name: 'Peter', code: 'peter@crbmonitor.com' },
-      { name: 'Tamara Guy', code: 'tamara.guy@crbmonitor.com' },
-      { name: 'Timothy Rogers', code: 'timothy.rogers@crbmonitor.com' },
-      { name: 'Isaac Moriarty', code: 'isaac.moriarty@crbmonitor.com' },
-      { name: 'Mel Dapanas', code: 'mel.dapanas@crbmonitor.com' },
-      { name: 'Jaypee Ollos', code: 'joephillip.ollos@crbmonitor.com' },
-      { name: 'James Francis', code: 'james.francis@crbmonitor.com' }
-    ],
+    // Groups whose members populate the assignee dropdown.
+    // Members are fetched dynamically so adding/removing users in Kintone
+    // automatically updates the list — no code changes needed.
+    TEAM_GROUPS: ['Research', 'Research Admins'],
 
     // Kintone groups authorized to see the Create Task button.
     // If the groups API call fails, the button is shown (fail open).
@@ -548,6 +541,50 @@
   }
 
   // ============================================================
+  // DYNAMIC TEAM MEMBER LOADING FROM GROUPS
+  // ============================================================
+
+  // Cached result: null = not loaded yet
+  var _teamMembers = null;
+
+  /**
+   * Fetches members from all CONFIG.TEAM_GROUPS, de-duplicates by email (code),
+   * and caches the result.  Returns [{name, code}] sorted by name.
+   */
+  function fetchTeamMembers() {
+    if (_teamMembers !== null) return Promise.resolve(_teamMembers);
+
+    var requests = CONFIG.TEAM_GROUPS.map(function(groupCode) {
+      return kintone.api(
+        kintone.api.url('/k/v1/group/users', true), 'GET',
+        { code: groupCode }
+      ).then(function(resp) {
+        return (resp.users || []).map(function(u) {
+          return { name: u.name, code: u.code };
+        });
+      }).catch(function() {
+        return [];
+      });
+    });
+
+    return Promise.all(requests).then(function(results) {
+      var seen = {};
+      var members = [];
+      results.forEach(function(groupUsers) {
+        groupUsers.forEach(function(u) {
+          if (!seen[u.code]) {
+            seen[u.code] = true;
+            members.push(u);
+          }
+        });
+      });
+      members.sort(function(a, b) { return a.name.localeCompare(b.name); });
+      _teamMembers = members;
+      return members;
+    });
+  }
+
+  // ============================================================
   // MODAL COMPONENT
   // ============================================================
 
@@ -599,12 +636,8 @@
         '</button>';
     }
 
-    // Build team member options
-    var memberOptionsHtml = '<option value="">-- Select --</option>';
-    for (var mi = 0; mi < CONFIG.TEAM_MEMBERS.length; mi++) {
-      var m = CONFIG.TEAM_MEMBERS[mi];
-      memberOptionsHtml += '<option value="' + m.code + '">' + m.name + '</option>';
-    }
+    // Placeholder — assignee dropdown is populated asynchronously after render
+    var memberOptionsHtml = '<option value="">Loading team members…</option>';
 
     // Build task type options
     var typeOptionsHtml = '';
@@ -676,6 +709,17 @@
       '</div>';
 
     document.body.appendChild(overlay);
+
+    // ---- Populate assignee dropdown from group members ----
+    var assigneeSelect = overlay.querySelector('#crb-assignee');
+    fetchTeamMembers().then(function(members) {
+      if (!assigneeSelect) return;
+      var opts = '<option value="">-- Select --</option>';
+      members.forEach(function(m) {
+        opts += '<option value="' + escapeHtml(m.code) + '">' + escapeHtml(m.name) + '</option>';
+      });
+      assigneeSelect.innerHTML = opts;
+    });
 
     // ---- Date quick-select pill handlers ----
     var datePills = overlay.querySelectorAll('.crb-date-pill');
@@ -761,14 +805,15 @@
         recordUrl: isBulk ? viewUrl : recordUrl,
         sourceRecordId: isBulk ? null : recordId
       }).then(function() {
-        var assigneeName = '';
-        for (var i = 0; i < CONFIG.TEAM_MEMBERS.length; i++) {
-          if (CONFIG.TEAM_MEMBERS[i].code === assignee) {
-            assigneeName = CONFIG.TEAM_MEMBERS[i].name;
+        // Resolve display name from cached group members
+        var assigneeName = assignee;
+        var cached = _teamMembers || [];
+        for (var i = 0; i < cached.length; i++) {
+          if (cached[i].code === assignee) {
+            assigneeName = cached[i].name;
             break;
           }
         }
-        if (!assigneeName) assigneeName = assignee;
         showMessage(overlay, '\u2713 Task created and assigned to ' + assigneeName + '!', 'success');
         setTimeout(function() { removeModal(); }, 1500);
       }).catch(function(error) {
