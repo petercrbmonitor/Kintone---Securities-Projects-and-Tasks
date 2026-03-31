@@ -88,15 +88,18 @@
     TEAM_GROUPS: ['Research', 'Research Admins'],
 
     // Fallback list used ONLY when the group API fails (permissions, network).
-    // Keep this list roughly in sync as a safety net.
+    // Keep this in sync with the Research + Research Admins groups in Kintone.
     FALLBACK_MEMBERS: [
-      { name: 'Peter', code: 'peter@crbmonitor.com' },
-      { name: 'Tamara Guy', code: 'tamara.guy@crbmonitor.com' },
-      { name: 'Timothy Rogers', code: 'timothy.rogers@crbmonitor.com' },
-      { name: 'Isaac Moriarty', code: 'isaac.moriarty@crbmonitor.com' },
+      // Research group
+      { name: 'Tim', code: 'timothy.rogers@crbmonitor.com' },
+      { name: 'Isaac M', code: 'isaac.moriarty@crbmonitor.com' },
       { name: 'Mel Dapanas', code: 'mel.dapanas@crbmonitor.com' },
       { name: 'Jaypee Ollos', code: 'joephillip.ollos@crbmonitor.com' },
-      { name: 'James Francis', code: 'james.francis@crbmonitor.com' }
+      // Research Admins group
+      { name: 'Jim', code: 'james.francis@crbmonitor.com' },
+      { name: 'Kyle', code: 'kyle.buckley@crbmonitor.com' },
+      { name: 'Peter', code: 'peter@crbmonitor.com' },
+      { name: 'Tamara', code: 'tamara.guy@crbmonitor.com' }
     ],
 
     // Kintone groups authorized to see the Create Task button.

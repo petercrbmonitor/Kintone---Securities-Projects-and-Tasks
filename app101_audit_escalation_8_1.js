@@ -43,7 +43,10 @@
   var DEFAULT_ASSIGNEE_EMAIL = 'peter@crbmonitor.com';
 
   // Fallback analyst list if group API fails (permissions, network, etc.)
+  // Keep in sync with Research Admins group in Kintone.
   var FALLBACK_ANALYSTS = [
+    { name: 'Jim', email: 'james.francis@crbmonitor.com' },
+    { name: 'Kyle', email: 'kyle.buckley@crbmonitor.com' },
     { name: 'Peter', email: 'peter@crbmonitor.com' },
     { name: 'Tamara', email: 'tamara.guy@crbmonitor.com' }
   ];
