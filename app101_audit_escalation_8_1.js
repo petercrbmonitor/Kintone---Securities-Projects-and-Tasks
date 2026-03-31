@@ -1143,7 +1143,9 @@
   // GAMIFICATION - Leaderboard, Badges, Streaks
   // ============================================================
 
-  const ANALYSTS = ['Peter', 'Tamara', 'Jim', 'Isaac', 'Tim', 'Anthony', 'Kyle'];
+  // Group used for leaderboard — members are fetched dynamically so
+  // adding / removing users in Kintone automatically updates the dashboard.
+  var LEADERBOARD_GROUP = 'Research';
 
   const BADGES = {
     10: '🥉',
@@ -1158,6 +1160,18 @@
     'Needs Analyst Review': '#fef3c7',
     'Complete': '#d4edda'
   };
+
+  // Fetch display names of members in a Kintone group
+  function fetchGroupMemberNames(groupCode) {
+    return kintone.api(kintone.api.url('/k/v1/group/users', true), 'GET', {
+      code: groupCode
+    }).then(function(resp) {
+      return (resp.users || []).map(function(u) { return u.name; });
+    }).catch(function() {
+      // If group API fails, derive names from existing records instead
+      return null;
+    });
+  }
 
   async function fetchAllRecords() {
     let allRecords = [];
@@ -1175,29 +1189,34 @@
     return allRecords;
   }
 
-  function calculateStats(records) {
+  function calculateStats(records, groupMembers) {
     const stats = {};
-    ANALYSTS.forEach(function(analyst) {
-      stats[analyst] = {
-        name: analyst,
-        total: 0,
-        completed: 0,
-        completedDates: []
-      };
-    });
+
+    // Seed stats for every current group member (even if they have 0 reviews)
+    if (groupMembers && groupMembers.length > 0) {
+      groupMembers.forEach(function(name) {
+        stats[name] = { name: name, total: 0, completed: 0, completedDates: [] };
+      });
+    }
+
+    // Walk all records — also pick up any reviewer NOT in the group
+    // (e.g. former interns with historical data)
     records.forEach(function(record) {
       var reviewer = record.reviewer ? record.reviewer.value : '';
       var status = record.review_status ? record.review_status.value : '';
       var reviewDate = record.review_date ? record.review_date.value : '';
-      if (reviewer && stats[reviewer]) {
-        stats[reviewer].total++;
-        if (status === 'Complete') {
-          stats[reviewer].completed++;
-          if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
-        }
+      if (!reviewer) return;
+      if (!stats[reviewer]) {
+        stats[reviewer] = { name: reviewer, total: 0, completed: 0, completedDates: [] };
+      }
+      stats[reviewer].total++;
+      if (status === 'Complete') {
+        stats[reviewer].completed++;
+        if (reviewDate) stats[reviewer].completedDates.push(reviewDate);
       }
     });
-    ANALYSTS.forEach(function(analyst) {
+
+    Object.keys(stats).forEach(function(analyst) {
       stats[analyst].streak = calculateGamifyStreak(stats[analyst].completedDates);
       stats[analyst].badge = getBadge(stats[analyst].completed);
     });
@@ -1369,8 +1388,13 @@
   // Gamification - list view dashboard
   kintone.events.on('app.record.index.show', async function(event) {
     if (!document.getElementById('gamification-container')) {
-      var allRecords = await fetchAllRecords();
-      var stats = calculateStats(allRecords);
+      var results = await Promise.all([
+        fetchAllRecords(),
+        fetchGroupMemberNames(LEADERBOARD_GROUP)
+      ]);
+      var allRecords = results[0];
+      var groupMembers = results[1]; // null on API failure
+      var stats = calculateStats(allRecords, groupMembers);
       var container = buildGamificationPanel(stats, allRecords);
       var headerSpace = kintone.app.getHeaderSpaceElement();
       if (headerSpace) headerSpace.appendChild(container);
