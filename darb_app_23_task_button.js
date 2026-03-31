@@ -87,6 +87,21 @@
     // automatically updates the list — no code changes needed.
     TEAM_GROUPS: ['Research', 'Research Admins'],
 
+    // Fallback list used ONLY when the group API fails (permissions, network).
+    // Keep this in sync with the Research + Research Admins groups in Kintone.
+    FALLBACK_MEMBERS: [
+      // Research group
+      { name: 'Tim', code: 'timothy.rogers@crbmonitor.com' },
+      { name: 'Isaac M', code: 'isaac.moriarty@crbmonitor.com' },
+      { name: 'Mel Dapanas', code: 'mel.dapanas@crbmonitor.com' },
+      { name: 'Jaypee Ollos', code: 'joephillip.ollos@crbmonitor.com' },
+      // Research Admins group
+      { name: 'Jim', code: 'james.francis@crbmonitor.com' },
+      { name: 'Kyle', code: 'kyle.buckley@crbmonitor.com' },
+      { name: 'Peter', code: 'peter@crbmonitor.com' },
+      { name: 'Tamara', code: 'tamara.guy@crbmonitor.com' }
+    ],
+
     // Kintone groups authorized to see the Create Task button.
     // If the groups API call fails, the button is shown (fail open).
     AUTHORIZED_GROUPS: ['Research', 'Research Admins'],
@@ -550,6 +565,7 @@
   /**
    * Fetches members from all CONFIG.TEAM_GROUPS, de-duplicates by email (code),
    * and caches the result.  Returns [{name, code}] sorted by name.
+   * Falls back to CONFIG.FALLBACK_MEMBERS when the group API returns nothing.
    */
   function fetchTeamMembers() {
     if (_teamMembers !== null) return Promise.resolve(_teamMembers);
@@ -559,10 +575,13 @@
         kintone.api.url('/k/v1/group/users', true), 'GET',
         { code: groupCode }
       ).then(function(resp) {
+        console.log('[CRB Task Button] Group "' + groupCode + '" returned ' +
+          (resp.users || []).length + ' members');
         return (resp.users || []).map(function(u) {
           return { name: u.name, code: u.code };
         });
-      }).catch(function() {
+      }).catch(function(err) {
+        console.warn('[CRB Task Button] Failed to fetch group "' + groupCode + '":', err);
         return [];
       });
     });
@@ -578,6 +597,11 @@
           }
         });
       });
+      // If group API returned nothing, use the fallback list
+      if (members.length === 0) {
+        console.warn('[CRB Task Button] No members from groups — using fallback list');
+        members = CONFIG.FALLBACK_MEMBERS.slice();
+      }
       members.sort(function(a, b) { return a.name.localeCompare(b.name); });
       _teamMembers = members;
       return members;
