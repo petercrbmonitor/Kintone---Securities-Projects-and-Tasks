@@ -158,7 +158,7 @@ Read in this order:
 - **Step 1.5 - Refresh DB References** - `showRefreshDialog`/`refreshDbReferences` (full Current DB rebuild + Watchlist MERGE), `convertXlsxToSheet_` (Drive REST), `headerIndex_`/`pick_`.
 - **Legacy Watchlist import** - one-time `showWatchlistImportDialog`/`importLegacyWatchlist`.
 - **Step 2 - Crosscheck** - `runCrosscheck` (ticker/ISIN/name/fuzzy/root matching + stale-ticker resurfacing), `removeTickersFromRefTab_`, `fuzzyPair_`/`fuzzyConfirm_`.
-- **Step 3 - Distribute / Route** - `distributeSelected`, `cleanupActiveTab`, `processReviews`, `routeSheetRows_`, `reorganizeInternTab_`, `requiredOk_`, `routeRow_` (with dedup).
+- **Step 3 - Distribute / Route** - `distributeSelected`, `cleanupActiveTab`, `processReviews`, `routeSheetRows_`, `reorganizeInternTab_`, `requiredReason_`, `routeRow_` (with dedup), `verifyRoutedDest_` (final validation of already-stamped rows), `logRoutingOutcomes_` (per-company outcome ledger).
 - **Move between lists** - `withPrefix_`, `consolidateToSort`, `moveSelected`, `moveWriteDest_`.
 - **Step 4 - Kintone export** - `buildKintoneUpload` (two tables), `parseSourceDocs_`, `tabToCsv_`/`csvCell_`, `downloadCsvDialog_` + the two download entry points.
 - **Shared utilities** - `addBusinessDays_`, `trimTab_`, `logHistory_`, `logStats_`, `toast_`.
