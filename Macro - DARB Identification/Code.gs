@@ -1514,7 +1514,7 @@ function refreshDbReferences(file) {
     var nn = normName_(r[0]);
     if (nn) watchNameSet[nn] = true;
   });
-  var preserved = [], graduated = [], seenLocal = {};
+  var preserved = [], graduated = [], seenLocal = {}, localStamp = {}, stamped = 0;
   var wlLr = wlSh.getLastRow();
   if (wlLr >= 2) {
     wlSh.getRange(2, 1, wlLr - 1, 13).getValues().forEach(function (r) {
@@ -1526,13 +1526,36 @@ function refreshDbReferences(file) {
         graduated.push(name + (t ? ' (' + t + ')' : ''));
         return;
       }
-      if (t ? watchTickerSet[t] : (nn && watchNameSet[nn])) return; // already in export
+      if (t ? watchTickerSet[t] : (nn && watchNameSet[nn])) {       // already in export
+        // The export copy wins the row, but the export never carries the local review stamp
+        // (Review Assignement / Ticker Reviewed Date / Analyst / Ps Note / Source / Note).
+        // Losing it made Crosscheck treat an already-reviewed ticker as never reviewed -
+        // stale-state churn every weekly refresh. Remember the stamp to graft onto the
+        // export row below.
+        if (r[2] || r[3]) {
+          if (t && !localStamp['t:' + t]) localStamp['t:' + t] = r;
+          if (nn && !localStamp['n:' + nn]) localStamp['n:' + nn] = r;
+        }
+        return;
+      }
       var key = t || ('name:' + nn);
       if (seenLocal[key]) return;
       seenLocal[key] = true;
       preserved.push(r);                                            // keep local row
     });
   }
+  // Graft preserved review stamps onto the matching export rows (only fields the export
+  // left blank - the export stays authoritative for everything it actually provides).
+  watchRows.forEach(function (w) {
+    var t = normTicker_(w[1]), nn = normName_(w[0]);
+    var s = (t && localStamp['t:' + t]) || (nn && localStamp['n:' + nn]);
+    if (!s) return;
+    var grafted = false;
+    [2, 3, 4, 5, 6, 7, 8].forEach(function (c) {  // RevAssign, RevDate, Analyst, PsNote, Tier, Source, Note
+      if (!String(w[c] || '').trim() && String(s[c] || '').trim() !== '') { w[c] = s[c]; grafted = true; }
+    });
+    if (grafted) stamped++;
+  });
   clearBody_(wlSh);
   var allWatch = watchRows.concat(preserved);
   if (allWatch.length) wlSh.getRange(2, 1, allWatch.length, 13).setValues(allWatch);
@@ -1551,10 +1574,12 @@ function refreshDbReferences(file) {
     : '';
   logHistory_('Refresh DB References', file.name,
     'Current DB: ' + activeRows.length + ' rows from [' + activeTabs.join(', ') + '] - ' +
-    'Watchlist: ' + watchRows.length + ' export + ' + preserved.length + ' preserved local - ' +
+    'Watchlist: ' + watchRows.length + ' export + ' + preserved.length + ' preserved local' +
+    (stamped ? ' (' + stamped + ' review stamps carried onto export rows)' : '') + ' - ' +
     'No-ticker (hidden ref): ' + noTickerRows.length + gradDetail);
   return 'Done. Current DB: ' + activeRows.length + '. Watchlist: ' + watchRows.length +
     ' export + ' + preserved.length + ' local kept' +
+    (stamped ? ', ' + stamped + ' review stamps carried over' : '') +
     (graduated.length ? ', ' + graduated.length + ' graduated off' : '') +
     '. No-ticker reference: ' + noTickerRows.length + '.';
 }
@@ -2003,13 +2028,24 @@ function distributeSelected_impl_() {
   var vals = sortSh.getRange(2, 1, lr - 1, 14).getValues();
   var today = new Date();
   var due = addBusinessDays_(today, 5);
-  var moved = 0, skipped = 0, toDelete = [], touched = {};
+  var moved = 0, skipped = 0, dups = 0, toDelete = [], touched = {}, pendingKeys = {};
 
   vals.forEach(function (r, i) {
     if (r[2] !== true) return;                       // Select checkbox (col C)
     var who = String(r[4] || '').trim();             // Assign To (col E)
     if (!who || (!interns[who] && ANALYST_OPTIONS.indexOf(who) < 0)) { skipped++; return; }
     var sh = interns[who] || (interns[who] = ensureInternTab_(who)); // create the tab on demand
+    // Idempotency guard: Sort rows are only deleted after the whole loop, so a run that dies
+    // mid-way leaves already-appended rows behind on Sort. Re-running must not hand the same
+    // company out twice - if it is already PENDING on the target tab (routed audit rows do not
+    // block a legitimate future re-review), just drop the Sort row.
+    var keys = pendingKeys[who] || (pendingKeys[who] = pendingInternKeys_(sh));
+    var kT = normTicker_(r[1]), kN = normName_(r[0]);
+    if (kT ? keys['t:' + kT] : (kN && keys['n:' + kN])) {
+      dups++;
+      toDelete.push(i + 2);
+      return;
+    }
     // Intern row (18 cols): default Primary Business Name to the AlphaSense name and seed the
     // Description / Inclusion / Tiering Rationale labels. Pure-Play, Website URLs and Source
     // Documents start blank for the analyst to fill.
@@ -2017,6 +2053,8 @@ function distributeSelected_impl_() {
       withPrefix_(r[8], RATIONALE_PREFIX), withPrefix_(r[9], TIER_RATIONALE_PREFIX), r[10] || '', r[11] || '', '',
       '', '', r[12] || '', r[13] || '', today, due]);
     formatRow_(sh, sh.getLastRow(), INTERN_WIDTH);
+    if (kT) keys['t:' + kT] = true;
+    if (kN) keys['n:' + kN] = true;
     touched[who] = sh;
     toDelete.push(i + 2);
     moved++;
@@ -2029,20 +2067,43 @@ function distributeSelected_impl_() {
   restyleTabs_([TABS.sort.name]);                     // refresh Sort filter/banding after row deletes
 
   logHistory_('Distribute Selected', 'Sort', moved + ' row(s) distributed' +
+    (dups ? ' - ' + dups + ' already pending on the target tab (duplicate handout removed from Sort)' : '') +
     (skipped ? ' - ' + skipped + ' skipped (no valid Assign To)' : ''));
   toast_('Distributed ' + moved + ' row(s).' +
+    (dups ? ' ' + dups + ' already pending on the target tab (deduped).' : '') +
     (skipped ? ' ' + skipped + ' checked row(s) skipped - set Assign To.' : ''));
+}
+
+/** Normalized ticker/name keys of the PENDING (not yet routed) rows on an intern tab.
+ *  Used by Distribute to keep partial-run re-runs from handing a company out twice. */
+function pendingInternKeys_(sh) {
+  var set = {};
+  var lr = sh.getLastRow();
+  if (lr < 2) return set;
+  sh.getRange(2, 1, lr - 1, 4).getValues().forEach(function (r) {
+    if (r[3]) return;                                // routed (date stamped) - not pending
+    var n = String(r[0] || '').trim();
+    if (n === COMPLETED_MARKER) return;
+    var t = normTicker_(r[1]);
+    if (t) set['t:' + t] = true;
+    var nn = normName_(n);
+    if (nn) set['n:' + nn] = true;
+  });
+  return set;
 }
 
 /** Clean-up button: route reviewed rows on the intern tab currently open. */
 function cleanupActiveTab_impl_() {
-  scaffoldAll_();
-  var sh = SpreadsheetApp.getActiveSheet();
-  var name = sh.getName();
+  // Capture the active tab BEFORE scaffolding - a first-time Dashboard build inside
+  // scaffoldAll_ switches the active sheet, which used to make this route the wrong tab.
+  var ss = SpreadsheetApp.getActive();
+  var name = ss.getActiveSheet().getName();
   if (!ANALYST_BY_FIRST.hasOwnProperty(name)) {
     toast_('Open an analyst review tab (named by first name), then run Clean-up.');
     return;
   }
+  scaffoldAll_();
+  var sh = ss.getSheetByName(name);
   var counts = { 'Add': 0, 'Watchlist': 0, 'FR Exclude': 0, 'Confirmed Exclude': 0, 'In DB': 0 };
   var skipped = routeSheetRows_(sh, counts);
   reorganizeInternTab_(sh);
@@ -2051,14 +2112,14 @@ function cleanupActiveTab_impl_() {
   forceMoveCheckboxes_(['Watchlist', 'FR Exclude', 'Confirmed Exclude']);
   var total = counts['Add'] + counts['Watchlist'] + counts['FR Exclude'] +
     counts['Confirmed Exclude'] + counts['In DB'];
-  logHistory_('Clean-up This Tab', name, total + ' routed' +
-    (counts._updated ? ' (' + counts._updated + ' stamped onto existing list rows)' : '') +
-    (counts._dups ? ' - ' + counts._dups + ' already staged (deduped)' : '') +
-    (skipped ? ' - ' + skipped + ' skipped (incomplete)' : ''));
+  logRoutingOutcomes_('Clean-up This Tab', name, counts, skipped, total + ' routed');
   toast_('Clean-up "' + name + '": ' + total + ' routed.' +
+    (counts._recovered ? ' ' + counts._recovered + ' recovered from a prior incomplete run.' : '') +
     (counts._updated ? ' ' + counts._updated + ' updated existing.' : '') +
     (counts._dups ? ' ' + counts._dups + ' already staged (deduped).' : '') +
-    (skipped ? ' ' + skipped + ' skipped - fill required fields.' : ''));
+    (counts._verified ? ' ' + counts._verified + ' already routed (verified).' : '') +
+    (skipped ? ' ' + skipped + ' skipped - see History Log for per-row reasons.' : '') +
+    (counts._errors ? ' ' + counts._errors + ' ERROR(S) - see History Log.' : ''));
 }
 
 /** Backstop: sweep ALL intern tabs and route eligible rows. */
@@ -2073,38 +2134,177 @@ function processReviews_impl_() {
   scaffoldInternSheets_();
   restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.adds.name]);
   forceMoveCheckboxes_(['Watchlist', 'FR Exclude', 'Confirmed Exclude']);
-  logHistory_('Process Reviews', 'All intern tabs',
+  logRoutingOutcomes_('Process Reviews', 'All intern tabs', counts, skipped,
     'Add ' + counts['Add'] + ', Watchlist ' + counts['Watchlist'] +
     ', FR Exclude ' + counts['FR Exclude'] + ', Confirmed Exclude ' + counts['Confirmed Exclude'] +
-    ', In DB ' + counts['In DB'] +
-    (counts._updated ? ' (' + counts._updated + ' stamped onto existing list rows)' : '') +
-    (counts._dups ? ' - ' + counts._dups + ' already staged (deduped)' : '') +
-    (skipped ? ' - ' + skipped + ' row(s) skipped (incomplete)' : ''));
+    ', In DB ' + counts['In DB']);
   toast_('Routed - Add: ' + counts['Add'] + ', Watchlist: ' + counts['Watchlist'] +
     ', FR Excl: ' + counts['FR Exclude'] + ', Conf Excl: ' + counts['Confirmed Exclude'] +
     ', In DB: ' + counts['In DB'] +
+    (counts._recovered ? '. ' + counts._recovered + ' recovered' : '') +
     (counts._dups ? '. ' + counts._dups + ' deduped' : '') +
-    (skipped ? '. Skipped ' + skipped + ' incomplete row(s).' : '.'));
+    (skipped ? '. Skipped ' + skipped + ' row(s) - see History Log.' : '.') +
+    (counts._errors ? ' ' + counts._errors + ' ERROR(S) - see History Log.' : ''));
 }
 
-/** Route all eligible rows on one intern sheet. Returns skipped count. */
+/**
+ * VERBOSE ROUTING LOG. Writes the run summary to the History Log (drives the Dashboard step
+ * status) plus a second "Routing Outcomes" history row with one line per company processed,
+ * and mirrors the full per-row ledger (including PENDING rows) to the Apps Script execution
+ * log (Extensions > Apps Script > Executions). Every company on the swept tab(s) ends the run
+ * with exactly one outcome line: ROUTED / OK (verified) / SKIPPED (reason) / ERROR (failure
+ * point) / PENDING (no assignment yet).
+ */
+function logRoutingOutcomes_(action, source, counts, skipped, summaryPrefix) {
+  var log = counts._log || [];
+  log.forEach(function (l) { Logger.log(l); });
+  var summary = summaryPrefix +
+    (counts._recovered ? ' (' + counts._recovered + ' recovered from a prior incomplete run)' : '') +
+    (counts._updated ? ' (' + counts._updated + ' stamped onto existing list rows)' : '') +
+    (counts._verified ? ' - ' + counts._verified + ' already routed (verified on destination)' : '') +
+    (counts._dups ? ' - ' + counts._dups + ' already staged (deduped)' : '') +
+    (skipped ? ' - ' + skipped + ' skipped (per-row reasons in Routing Outcomes)' : '') +
+    (counts._errors ? ' - ' + counts._errors + ' ERROR(S)' : '');
+  logHistory_(action, source, summary);
+  // Per-company outcomes on their own history row (PENDING lines stay in the execution log
+  // to keep the cell readable). 'Routing Outcomes' is not in STEP_BY_ACTION, so it never
+  // overwrites the Dashboard status.
+  var detail = log.filter(function (l) { return l.indexOf('PENDING') !== 0; });
+  if (detail.length) {
+    var text = detail.join('\n');
+    if (text.length > 4500) {
+      text = text.slice(0, 4500) + '\n... truncated - full log under Extensions > Apps Script > Executions';
+    }
+    logHistory_('Routing Outcomes', source, text);
+  }
+}
+
+/** Route all eligible rows on one intern sheet. Returns skipped count.
+ *  Every non-blank row ends with exactly one outcome line in counts._log:
+ *    ROUTED  - written to its destination this run (incl. recovered / dedup-stamped rows)
+ *    OK      - already routed on a previous run, verified present on its destination
+ *    SKIPPED - not routed, with the exact reason
+ *    ERROR   - routing threw, with the failure point (row left un-stamped so it retries)
+ *    PENDING - no Review Assignement yet (not processed)
+ *  A pre-set Ticker Reviewed Date used to be skipped silently; that hid rows whose date was
+ *  hand-entered (or pasted from a reference list - the first 5 columns align) and buried them
+ *  under the Completed block without ever writing the destination. Those rows are now VERIFIED
+ *  against their destination and re-routed when missing, so partial or stale runs self-heal. */
 function routeSheetRows_(sh, counts) {
   var lr = sh.getLastRow();
   if (lr < 2) return 0;
+  var ss = SpreadsheetApp.getActive();
   var skipped = 0;
+  var log = counts._log = counts._log || [];
+  var tab = sh.getName();
   var vals = sh.getRange(2, 1, lr - 1, INTERN_WIDTH).getValues();
   vals.forEach(function (r, i) {
+    var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+    if (!company && !ticker) return;                  // blank spacer row
+    if (company === COMPLETED_MARKER) return;         // audit-block marker row
+    var who = tab + '!' + (i + 2) + ' ' + (company || '(no name)') +
+      (ticker ? ' [' + ticker + ']' : '');
     var assignment = String(r[2] || '').trim();
-    if (!assignment) return;
-    if (r[3]) return;                                 // already routed (date stamped)
-    if (ASSIGN_OPTIONS.indexOf(assignment) < 0) { skipped++; return; }
-    if (!requiredOk_(assignment, r)) { skipped++; return; }
-    var status = routeRow_(sh, i + 2, r, assignment);  // 'added' | 'updated' | 'dup' | 'indb'
-    if (status === 'dup') counts._dups = (counts._dups || 0) + 1;     // already staged elsewhere
-    else counts[assignment]++;                          // added / updated / in-DB all count as routed
-    if (status === 'updated') counts._updated = (counts._updated || 0) + 1;
+    if (!assignment) {
+      if (r[3]) {                                     // date but no decision - never bury silently
+        skipped++;
+        log.push('SKIPPED ' + who + ' - Ticker Reviewed Date is set but Review Assignement is ' +
+          'blank; set an assignment so it can route (or clear the date).');
+      } else {
+        log.push('PENDING ' + who + ' - no Review Assignement yet.');
+      }
+      return;
+    }
+    if (ASSIGN_OPTIONS.indexOf(assignment) < 0) {
+      skipped++;
+      log.push('SKIPPED ' + who + ' - invalid Review Assignement "' + assignment +
+        '" (must be one of: ' + ASSIGN_OPTIONS.join(' / ') + ').');
+      return;
+    }
+    if (r[3]) {
+      // Date already stamped: either routed on a previous run, or hand-entered/pasted.
+      // Verify the destination actually holds the record; re-route it when it does not.
+      var seenOn = verifyRoutedDest_(ss, assignment, normTicker_(ticker), normName_(company));
+      if (seenOn) {
+        counts._verified = (counts._verified || 0) + 1;
+        log.push('OK ' + who + ' - already routed (' + assignment + '; verified on ' + seenOn + ').');
+        return;
+      }
+      var reasonV = requiredReason_(assignment, r);
+      if (reasonV) {
+        skipped++;
+        log.push('SKIPPED ' + who + ' - reviewed date is set but the record is NOT on "' +
+          assignment + '" and it cannot be re-routed: ' + reasonV);
+        return;
+      }
+      try {
+        var st2 = routeRow_(sh, i + 2, r, assignment);
+        counts._recovered = (counts._recovered || 0) + 1;
+        if (st2 === 'dup') counts._dups = (counts._dups || 0) + 1;
+        else counts[assignment]++;
+        if (st2 === 'updated') counts._updated = (counts._updated || 0) + 1;
+        log.push('ROUTED ' + who + ' -> ' + assignment + ' (RECOVERED: reviewed date was ' +
+          'already set but the record was missing from the destination).');
+      } catch (errV) {
+        counts._errors = (counts._errors || 0) + 1;
+        skipped++;
+        log.push('ERROR ' + who + ' - re-route to ' + assignment + ' failed: ' + errV.message);
+      }
+      return;
+    }
+    var reason = requiredReason_(assignment, r);
+    if (reason) {
+      skipped++;
+      log.push('SKIPPED ' + who + ' - ' + reason);
+      return;
+    }
+    try {
+      var status = routeRow_(sh, i + 2, r, assignment); // 'added' | 'updated' | 'dup' | 'indb'
+      if (status === 'dup') {
+        counts._dups = (counts._dups || 0) + 1;         // already staged elsewhere
+        log.push('ROUTED ' + who + ' -> ' + assignment + ' (already staged on Adds - deduped, marked routed).');
+      } else {
+        counts[assignment]++;                           // added / updated / in-DB all count as routed
+        if (status === 'updated') {
+          counts._updated = (counts._updated || 0) + 1;
+          log.push('ROUTED ' + who + ' -> ' + assignment + ' (stamped onto the existing destination row).');
+        } else if (status === 'indb') {
+          log.push('ROUTED ' + who + ' - In DB (already in Current DB; nothing appended).');
+        } else {
+          log.push('ROUTED ' + who + ' -> ' + assignment + '.');
+        }
+      }
+    } catch (err) {
+      // One bad row must not abort the sweep: the row stays un-stamped (routeRow_ stamps the
+      // date last), so it is retried automatically on the next run.
+      counts._errors = (counts._errors || 0) + 1;
+      skipped++;
+      log.push('ERROR ' + who + ' - routing to ' + assignment + ' failed: ' + err.message +
+        ' (row left un-stamped; it will retry next run).');
+    }
   });
   return skipped;
+}
+
+/**
+ * FINAL VALIDATION for rows whose Ticker Reviewed Date is already set: return the tab the
+ * record was actually found on, or '' when it is missing from its destination (=> the stamp
+ * is stale / hand-entered and the row must be re-routed). 'Add' rows are satisfied by the
+ * Adds staging tab, Current DB (after the Kintone import lands) or the Watchlist hold row;
+ * 'In DB' writes nothing by design, so a stamped In DB row is always satisfied.
+ */
+function verifyRoutedDest_(ss, assignment, nT, nN) {
+  function on(tabName, nCol, tCol) {
+    var s = ss.getSheetByName(tabName);
+    return (s && findExistingRow_(s, nCol, tCol, nT, nN) > 0) ? tabName : '';
+  }
+  if (assignment === 'In DB') return 'Current DB (In DB writes no list row)';
+  if (assignment === 'Watchlist') return on('Watchlist', 1, 2);
+  if (assignment === 'FR Exclude' || assignment === 'Confirmed Exclude') return on(assignment, 1, 2);
+  if (assignment === 'Add') {
+    return on(TABS.adds.name, 5, 7) || on(TABS.currentDb.name, 1, 2) || on('Watchlist', 1, 2);
+  }
+  return '';
 }
 
 var COMPLETED_MARKER = 'Completed - routed (audit)';
@@ -2119,7 +2319,10 @@ function reorganizeInternTab_(sh) {
     var a = String(r[0] || '').trim();
     if (!a && !String(r[1] || '').trim()) return;     // blank spacer rows
     if (a === COMPLETED_MARKER) return;               // old marker rows
-    (r[3] ? done : pending).push(r);                  // routed = Ticker Reviewed Date set
+    // Routed = script-stamped: Ticker Reviewed Date AND a Review Assignement (routeRow_ always
+    // sets both). A hand-entered date alone must stay pending - filing it under the Completed
+    // block used to bury rows that were never actually written to their destination.
+    (r[3] && String(r[2] || '').trim() ? done : pending).push(r);
   });
   if (!done.length) return;                           // nothing routed yet
   clearBody_(sh);
@@ -2132,11 +2335,17 @@ function reorganizeInternTab_(sh) {
   sh.getRange(markerRow + 1, 1, done.length, INTERN_WIDTH).setFontLine('line-through');
 }
 
-/** Required fields per choice - rows missing them are skipped, never mis-routed. */
-function requiredOk_(assignment, r) {
-  if (!String(r[0] || '').trim() || !String(r[1] || '').trim()) return false; // name + ticker
-  if (assignment === 'Add' && !String(r[8] || '').trim()) return false;       // tier when Add
-  return true;
+/** Required fields per choice - rows missing them are skipped, never mis-routed.
+ *  Returns '' when the row is routable, otherwise the exact skip reason.
+ *  NOTE: Tier lives at index 9 (col J) since the Tiering Rationale column was inserted at
+ *  index 8 - the old r[8] check silently tested the wrong column after that layout change. */
+function requiredReason_(assignment, r) {
+  if (!String(r[0] || '').trim()) return 'missing Company Name (col A).';
+  if (!String(r[1] || '').trim()) return 'missing Ticker (col B).';
+  if (assignment === 'Add' && !String(r[9] || '').trim()) {
+    return 'missing If Add Recomended Tier (col J) - required for Add.';
+  }
+  return '';
 }
 
 /**
@@ -2168,6 +2377,7 @@ function routeRow_(internSh, rowNum, r, assignment) {
 
   if (assignment === 'Watchlist') {
     var wl = ss.getSheetByName('Watchlist');
+    if (!wl) throw new Error('destination tab "Watchlist" not found');
     var wlRow = findExistingRow_(wl, 1, 2, nT, nN);
     if (wlRow > 0) {
       // Already on the Watchlist (commonly a bare export / legacy row) - stamp the review onto
@@ -2181,6 +2391,7 @@ function routeRow_(internSh, rowNum, r, assignment) {
     }
   } else if (assignment === 'FR Exclude' || assignment === 'Confirmed Exclude') {
     var dest = ss.getSheetByName(assignment);
+    if (!dest) throw new Error('destination tab "' + assignment + '" not found');
     var destRow = findExistingRow_(dest, 1, 2, nT, nN);
     if (destRow > 0) {
       stampReviewOnDest_(dest, destRow, assignment, today, analyst, inclusion, tier, source, note, sector, false);
@@ -2193,6 +2404,9 @@ function routeRow_(internSh, rowNum, r, assignment) {
     }
   } else if (assignment === 'Add') {
     var addsSh = ss.getSheetByName(TABS.adds.name);
+    if (!addsSh) throw new Error('destination tab "' + TABS.adds.name + '" not found');
+    var wlAdd = ss.getSheetByName('Watchlist');
+    if (!wlAdd) throw new Error('destination tab "Watchlist" not found (Add hold row)');
     if (findExistingRow_(addsSh, 5, 7, nT, nN) > 0) {
       status = 'dup';                               // already staged on Adds - no duplicate
     } else {
@@ -2208,7 +2422,6 @@ function routeRow_(internSh, rowNum, r, assignment) {
       addsSh.getRange(ar, 1, 1, 2).insertCheckboxes(); // Imported? / Select = False
       formatRow_(addsSh, ar, TABS.adds.header.length);
       // Hold on Watchlist until it appears Active in a DB refresh (then it graduates off).
-      var wlAdd = ss.getSheetByName('Watchlist');
       if (findExistingRow_(wlAdd, 1, 2, nT, nN) <= 0) {
         var pendNote = String(note || '').trim();
         pendNote = pendNote ? pendNote + ' - Pending Kintone Add' : 'Pending Kintone Add';
