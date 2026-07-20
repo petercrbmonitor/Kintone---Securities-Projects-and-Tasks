@@ -792,11 +792,18 @@ function migrateInternRow_(r) {
 
 /** Rewrite an intern tab's header to the canonical schema and realign its rows. */
 function migrateInternTab_(sh) {
+  // Only run the legacy-layout row heuristics when the header is actually an old layout.
+  // On a force-rescaffold of a current 18-col tab the rows are already aligned, and
+  // migrateInternRow_'s date sniffing could misread a current row (e.g. one with blank
+  // Date Assigned / Due Date whose Note starts with a date-like string) as the ancient
+  // 16-col layout and scramble it.
+  var cur = sh.getRange(1, 1, 1, INTERN_WIDTH).getValues()[0];
+  var headerCurrent = cur.every(function (v, i) { return String(v) === String(INTERN_HEADER[i]); });
   var lr = sh.getLastRow();
   var rows = [];
   if (lr >= 2) {
     sh.getRange(2, 1, lr - 1, INTERN_WIDTH).getValues().forEach(function (r) {
-      var m = migrateInternRow_(r);
+      var m = headerCurrent ? r : migrateInternRow_(r);
       if (!String(m[0] || '').trim() && !String(m[1] || '').trim()) return; // drop blank spacers
       rows.push(m);
     });
@@ -2098,11 +2105,22 @@ function cleanupActiveTab_impl_() {
   // scaffoldAll_ switches the active sheet, which used to make this route the wrong tab.
   var ss = SpreadsheetApp.getActive();
   var name = ss.getActiveSheet().getName();
+  var legacy = name.match(INTERN_RE);          // "<Name> - Sort" - renamed to first name by scaffold
+  if (legacy && ANALYST_BY_FIRST.hasOwnProperty(analystFirst_(legacy[1]))) {
+    name = analystFirst_(legacy[1]);
+  }
   if (!ANALYST_BY_FIRST.hasOwnProperty(name)) {
     toast_('Open an analyst review tab (named by first name), then run Clean-up.');
     return;
   }
   scaffoldAll_();
+  if (legacy && ss.getSheetByName(legacy[0])) {
+    // The legacy tab could not be renamed (a "<first name>" tab already exists) - do not
+    // silently sweep that other tab instead of the one the operator has open.
+    toast_('Tab "' + legacy[0] + '" clashes with existing tab "' + name +
+      '" - merge or rename it, then re-run Clean-up.');
+    return;
+  }
   var sh = ss.getSheetByName(name);
   var counts = { 'Add': 0, 'Watchlist': 0, 'FR Exclude': 0, 'Confirmed Exclude': 0, 'In DB': 0 };
   var skipped = routeSheetRows_(sh, counts);
@@ -2221,10 +2239,11 @@ function routeSheetRows_(sh, counts) {
         '" (must be one of: ' + ASSIGN_OPTIONS.join(' / ') + ').');
       return;
     }
+    var nT = normTicker_(ticker), nN = normName_(company);
     if (r[3]) {
       // Date already stamped: either routed on a previous run, or hand-entered/pasted.
       // Verify the destination actually holds the record; re-route it when it does not.
-      var seenOn = verifyRoutedDest_(ss, assignment, normTicker_(ticker), normName_(company));
+      var seenOn = verifyRoutedDest_(ss, counts, assignment, nT, nN);
       if (seenOn) {
         counts._verified = (counts._verified || 0) + 1;
         log.push('OK ' + who + ' - already routed (' + assignment + '; verified on ' + seenOn + ').');
@@ -2239,6 +2258,7 @@ function routeSheetRows_(sh, counts) {
       }
       try {
         var st2 = routeRow_(sh, i + 2, r, assignment);
+        noteRoutedKeys_(counts, assignment, nT, nN);
         counts._recovered = (counts._recovered || 0) + 1;
         if (st2 === 'dup') counts._dups = (counts._dups || 0) + 1;
         else counts[assignment]++;
@@ -2260,6 +2280,7 @@ function routeSheetRows_(sh, counts) {
     }
     try {
       var status = routeRow_(sh, i + 2, r, assignment); // 'added' | 'updated' | 'dup' | 'indb'
+      noteRoutedKeys_(counts, assignment, nT, nN);
       if (status === 'dup') {
         counts._dups = (counts._dups || 0) + 1;         // already staged elsewhere
         log.push('ROUTED ' + who + ' -> ' + assignment + ' (already staged on Adds - deduped, marked routed).');
@@ -2292,11 +2313,14 @@ function routeSheetRows_(sh, counts) {
  * is stale / hand-entered and the row must be re-routed). 'Add' rows are satisfied by the
  * Adds staging tab, Current DB (after the Kintone import lands) or the Watchlist hold row;
  * 'In DB' writes nothing by design, so a stamped In DB row is always satisfied.
+ * Membership is matched like findExistingRow_ (ticker when present, else name) but read from
+ * the per-run destKeys_ cache - verifying hundreds of audit rows costs one sheet read per
+ * destination tab, not one per row.
  */
-function verifyRoutedDest_(ss, assignment, nT, nN) {
+function verifyRoutedDest_(ss, counts, assignment, nT, nN) {
   function on(tabName, nCol, tCol) {
-    var s = ss.getSheetByName(tabName);
-    return (s && findExistingRow_(s, nCol, tCol, nT, nN) > 0) ? tabName : '';
+    var set = destKeys_(ss, counts, tabName, nCol, tCol);
+    return (nT ? set.t[nT] : (nN && set.n[nN])) ? tabName : '';
   }
   if (assignment === 'In DB') return 'Current DB (In DB writes no list row)';
   if (assignment === 'Watchlist') return on('Watchlist', 1, 2);
@@ -2305,6 +2329,46 @@ function verifyRoutedDest_(ss, assignment, nT, nN) {
     return on(TABS.adds.name, 5, 7) || on(TABS.currentDb.name, 1, 2) || on('Watchlist', 1, 2);
   }
   return '';
+}
+
+/** Lazily read + cache a destination tab's membership as {t:{ticker:true}, n:{name:true}}
+ *  on counts._destKeys. One getValues per tab per run, shared across all verified rows
+ *  (and across every intern tab in a Process Reviews sweep). */
+function destKeys_(ss, counts, tabName, nCol, tCol) {
+  var cache = counts._destKeys = counts._destKeys || {};
+  if (cache[tabName]) return cache[tabName];
+  var set = { t: {}, n: {} };
+  var s = ss.getSheetByName(tabName);
+  if (s) {
+    var lr = s.getLastRow();
+    if (lr >= 2) {
+      var maxC = Math.max(nCol, tCol);
+      s.getRange(2, 1, lr - 1, maxC).getValues().forEach(function (r) {
+        var t = normTicker_(r[tCol - 1]);
+        if (t) set.t[t] = true;
+        var nn = normName_(r[nCol - 1]);
+        if (nn) set.n[nn] = true;
+      });
+    }
+  }
+  cache[tabName] = set;
+  return set;
+}
+
+/** After a successful route, fold the company into the cached destination sets so later
+ *  rows for the same ticker verify against up-to-date membership within this run. */
+function noteRoutedKeys_(counts, assignment, nT, nN) {
+  var cache = counts._destKeys;
+  if (!cache) return;
+  var tabs = assignment === 'Add' ? [TABS.adds.name, 'Watchlist']
+    : assignment === 'In DB' ? []
+    : [assignment];
+  tabs.forEach(function (tn) {
+    var set = cache[tn];
+    if (!set) return;
+    if (nT) set.t[nT] = true;
+    if (nN) set.n[nN] = true;
+  });
 }
 
 var COMPLETED_MARKER = 'Completed - routed (audit)';
@@ -2503,6 +2567,11 @@ function moveSelected_impl_() {
     if (r[cfg.selectCol - 1] !== true) return;              // Select checkbox
     var dest = String(r[cfg.moveCol - 1] || '').trim();     // Move To
     if (MOVE_OPTIONS.indexOf(dest) < 0) { skipped++; return; }
+    // Self-move guard: "moving" a row onto the list it is already on would find itself as the
+    // dedup hit and then DELETE the source row - the company would vanish from the list.
+    // (The Move To dropdown on Watchlist / FR / Confirmed Exclude does offer the tab's own
+    // name.) Skip it and keep the row.
+    if (dest === name) { skipped++; return; }
     var company = String(r[cfg.company] || '').trim();
     var ticker = String(r[cfg.ticker] || '').trim();
     if (!company && !ticker) { skipped++; return; }
@@ -2541,10 +2610,10 @@ function moveSelected_impl_() {
     ', Watchlist ' + moved['Watchlist'] + ', FR Exclude ' + moved['FR Exclude'] +
     ', Confirmed Exclude ' + moved['Confirmed Exclude'] + ', Removed ' + moved['Remove'] +
     (dups ? ' - ' + dups + ' already on destination (deduped)' : '') +
-    (skipped ? ' - ' + skipped + ' skipped (no Move To set)' : ''));
+    (skipped ? ' - ' + skipped + ' skipped (no valid Move To, or Move To = this list)' : ''));
   toast_('Moved ' + total + ' row(s) from "' + name + '".' +
     (dups ? ' ' + dups + ' already on destination (deduped).' : '') +
-    (skipped ? ' ' + skipped + ' skipped - set Move To.' : ''));
+    (skipped ? ' ' + skipped + ' skipped - set a Move To that is not this list.' : ''));
 }
 
 /** Write one reclassified row to its destination list. Returns true if appended, false if
