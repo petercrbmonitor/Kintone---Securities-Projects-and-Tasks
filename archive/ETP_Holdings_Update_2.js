@@ -54,11 +54,26 @@
     'DARB - Closed-end Fund (CEF)',
     'DA - Options Based Strategy Exchange Traded Fund (ETF)',
     'DA - Options Based Strategy ETP',
-    'DA - Futures'
+    'DA - Futures',
+    'Fund of Funds'
   ];
 
   // Only pull profiles with this Profile Status (Drop_down_22).
   var APP23_ACTIVE_ONLY = true;
+
+  // ---- FUND OF FUNDS POST-FILTER ----
+  // 'Fund of Funds' spans crypto FoFs and funds that just hold equities of public
+  // companies. Only the crypto side belongs in this queue, and the sector query
+  // cannot see holdings rows, so FoF profiles are post-filtered after the pull:
+  // one qualifies when its master data shows crypto / ETF / derivative exposure -
+  // any DA ETP Holdings row typed with one of the classes below, Holds Spot
+  // Crypto = Yes, or the ETP Holdings Type summary naming one of the classes.
+  // Equities-only FoFs stay out (and drop out on refresh if they turn equities-only).
+  // A FoF with no holdings data at all has no crypto evidence and is skipped by
+  // default; set FOF_INCLUDE_WHEN_EMPTY = true to queue those for classification.
+  var FOF_SECTOR = 'Fund of Funds';
+  var FOF_CRYPTO_CLASSES = ['Spot', 'Funds', 'Futures', 'Options', 'Permitted Swaps'];
+  var FOF_INCLUDE_WHEN_EMPTY = false;
 
   // ---- ROUND-ROBIN ASSIGNMENT ----
   // New queued records are auto-assigned across an analyst pool, load-balanced by each
@@ -118,7 +133,9 @@
     updatedBy: 'HoldingsUpdateSummary', // Holdings last updated by (name)
     updatedAt: 'Date_and_time_1',    // Holding review date and time
     boxName: 'Text_4',               // Box folder name
-    boxRef: 'Text_5'                 // Box folder reference (id or URL) the Box plugin uses
+    boxRef: 'Text_5',                // Box folder reference (id or URL) the Box plugin uses
+    holdsSpot: 'Drop_down_34',       // Holds Spot Crypto (Yes/No) - FoF post-filter signal
+    holdingsType: 'Text_52'          // ETP Holdings Type summary - FoF post-filter signal
   };
 
   // Reference app (App 85 test / App 34 live) field codes - for BCBS auto-fill.
@@ -448,6 +465,29 @@
   }
   function F_in(code, vals) { return code + ' in (' + quoteList(vals) + ')'; }
 
+  // Fund of Funds post-filter (see FOF_* config). Non-FoF sectors always pass;
+  // a FoF passes only on crypto / ETF / derivative evidence in the master record.
+  function fofQualifies(rec) {
+    if (valOf(rec, A23.sector) !== FOF_SECTOR) return true;
+    if (valOf(rec, A23.holdsSpot) === 'Yes') return true;
+    var isCrypto = function (s) {
+      s = String(s || '').trim().toLowerCase();
+      return s && FOF_CRYPTO_CLASSES.some(function (c) { return c.toLowerCase() === s; });
+    };
+    var rows = (rec[A23.holdingsTable] && rec[A23.holdingsTable].value) || [];
+    var sawTyped = false;
+    for (var i = 0; i < rows.length; i++) {
+      var t = cell(rows[i].value || {}, A23.h_assetType);
+      if (String(t || '').trim()) sawTyped = true;
+      if (isCrypto(t)) return true;
+    }
+    // Summary can carry the classes even when rows were cleared ("Equities; Spot").
+    var summary = String(valOf(rec, A23.holdingsType)).split(';');
+    for (var j = 0; j < summary.length; j++) if (isCrypto(summary[j])) return true;
+    if (sawTyped) return false;          // typed rows, none crypto (equities-only etc.)
+    return FOF_INCLUDE_WHEN_EMPTY;       // no holdings evidence at all
+  }
+
   // silent = true suppresses the failure alert (used by the throttled auto-sync on open).
   function pullQueue(providerFilter, silent) {
     busy(true, 'Pulling qualifying profiles from App ' + APP_MASTER + '...');
@@ -496,6 +536,7 @@
           var seq = maxOrder;
           var qualifying = {};                 // master ids still qualifying (this pull)
           src.forEach(function (rec) {
+            if (!fofQualifies(rec)) return;    // equities-only Fund of Funds stays out
             var key = rec.$id.value;
             qualifying[key] = true;
             if (byKey[key]) {
@@ -764,9 +805,10 @@
           if (!d) return;
           var body = mapMasterFields(m);     // also refreshes profile_status from the master
           body[F.inEdit] = { value: 'No' };
-          // Self-cleaning: a master that is no longer Active drops out of the queue
+          // Self-cleaning: a master that is no longer Active (or a Fund of Funds
+          // that no longer shows crypto exposure) drops out of the queue
           // (status -> Not in Queue) instead of being re-queued for review.
-          if (!APP23_ACTIVE_ONLY || valOf(m, A23.profileStatus) === 'Active') {
+          if ((!APP23_ACTIVE_ONLY || valOf(m, A23.profileStatus) === 'Active') && fofQualifies(m)) {
             body[F.status] = { value: ST.QUEUE };
           } else {
             body[F.status] = { value: ST.NOT };
@@ -781,7 +823,7 @@
           busy(false);
           var requeued = updates.length - dropped;
           var msg = 'Re-queued ' + requeued + ' due record(s) with fresh App ' + APP_MASTER + ' data.';
-          if (dropped) msg += '\n' + dropped + ' record(s) no longer Active - moved to "Not in Queue".';
+          if (dropped) msg += '\n' + dropped + ' record(s) no longer qualify - moved to "Not in Queue".';
           if (missing) msg += '\n' + missing + ' due record(s) had no matching master profile and were skipped.';
           toast(msg);
           return requeued;

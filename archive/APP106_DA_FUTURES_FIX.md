@@ -21,11 +21,29 @@ app's real dropdown options before querying; the label was simply never listed.
 
 **Fix:** added `'DA - Futures'` to `ALLOWLIST_SECTORS`.
 
-Other exclusions that remain by design (confirm with the team):
+Other exclusions that remain by design:
 
-- `Fund of Funds` - a Tier-1B fund sector, also NOT allowlisted today.
 - All company sectors (Mining, Exchanges/Platforms, etc.) - intentionally out.
 - Non-`Active` profiles (any sector) - excluded by `APP23_ACTIVE_ONLY`.
+
+### Fund of Funds - conditional inclusion
+
+`Fund of Funds` (Tier-1B) was also missing from the allowlist, but the sector is
+mixed: crypto FoFs belong in the queue, FoFs that just hold equities of public
+companies do not. The sector query cannot see holdings rows, so the sector is
+now allowlisted and a **post-pull filter** (`fofQualifies()`) keeps only FoFs
+with crypto / ETF / derivative evidence in the master record:
+
+- any DA ETP Holdings row (Table_7) typed `Spot` / `Funds` / `Futures` /
+  `Options` / `Permitted Swaps`, or
+- `Holds Spot Crypto` (Drop_down_34) = `Yes`, or
+- the `ETP Holdings Type` summary (Text_52) naming one of those classes.
+
+Equities-only FoFs stay out, and a queued FoF that turns equities-only drops
+out on the next full refresh / due-review sweep. A FoF with **no holdings data
+at all** is skipped by default (no crypto evidence); set
+`FOF_INCLUDE_WHEN_EMPTY = true` in the config to queue those for manual
+classification instead.
 
 ## Root cause 2 - "Pull failed: Cannot read properties of undefined (reading 'value')"
 
@@ -51,6 +69,7 @@ on any page of `csl61zqur0t5.kintone.com` (adjust `MASTER` to 86 for test):
 ```js
 (function () {
   var MASTER = 23, THIS_APP = 106;
+  var CLASSES = ['spot', 'funds', 'futures', 'options', 'permitted swaps'];
   function all(app, query, fields, out, offset) {
     out = out || []; offset = offset || 0;
     var q = query + ' order by $id asc limit 500 offset ' + offset;
@@ -60,16 +79,33 @@ on any page of `csl61zqur0t5.kintone.com` (adjust `MASTER` to 86 for test):
         return r.records.length === 500 ? all(app, query, fields, out, offset + 500) : out;
       });
   }
+  // Same rule as fofQualifies() in the App 106 JS.
+  function fofOK(r) {
+    if (((r.Drop_down_34 || {}).value) === 'Yes') return true;
+    var rows = (r.Table_7 && r.Table_7.value) || [];
+    var hit = rows.some(function (row) {
+      return CLASSES.indexOf((((row.value.Text_30 || {}).value) || '').trim().toLowerCase()) > -1;
+    });
+    if (hit) return true;
+    return (((r.Text_52 || {}).value) || '').toLowerCase().split(';').some(function (s) {
+      return CLASSES.indexOf(s.trim()) > -1;
+    });
+  }
   Promise.all([
     all(MASTER, 'Drop_down_3 in ("DA - Futures") and Drop_down_22 in ("Active")', ['$id']),
+    all(MASTER, 'Drop_down_3 in ("Fund of Funds") and Drop_down_22 in ("Active")'),
     all(THIS_APP, '', ['app23_record_id'])
   ]).then(function (res) {
     var tracked = {};
-    res[1].forEach(function (r) { tracked[r.app23_record_id.value] = true; });
-    var missing = res[0].filter(function (r) { return !tracked[r.$id.value]; });
-    console.log('Active "DA - Futures" profiles in App ' + MASTER + ':', res[0].length);
-    console.log('Not yet in App 106 (captured after fix):', missing.length,
-      missing.map(function (r) { return r.$id.value; }));
+    res[2].forEach(function (r) { tracked[r.app23_record_id.value] = true; });
+    var fut = res[0].filter(function (r) { return !tracked[r.$id.value]; });
+    var fof = res[1].filter(fofOK);
+    var fofNew = fof.filter(function (r) { return !tracked[r.$id.value]; });
+    console.log('Active "DA - Futures" profiles:', res[0].length,
+      '| captured after fix:', fut.length, fut.map(function (r) { return r.$id.value; }));
+    console.log('Active "Fund of Funds" profiles:', res[1].length,
+      '| crypto-qualifying:', fof.length,
+      '| captured after fix:', fofNew.length, fofNew.map(function (r) { return r.$id.value; }));
   });
 })();
 ```
