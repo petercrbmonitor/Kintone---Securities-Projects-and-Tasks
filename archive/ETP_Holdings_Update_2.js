@@ -53,7 +53,8 @@
     'DA & DARB - Closed-end Fund (CEF)',
     'DARB - Closed-end Fund (CEF)',
     'DA - Options Based Strategy Exchange Traded Fund (ETF)',
-    'DA - Options Based Strategy ETP'
+    'DA - Options Based Strategy ETP',
+    'DA - Futures'
   ];
 
   // Only pull profiles with this Profile Status (Drop_down_22).
@@ -475,7 +476,9 @@
 
   function doPull(providerFilter, allow) {
     // Existing this-app records keyed by app23 id (status + lock drive the dequeue sweep).
-    return fetchAll(THIS_APP, '', [F.a23id, F.status, F.inEdit, F.order])
+    // $id must be requested explicitly (Kintone omits it when "fields" is set) -
+    // dequeueRecords updates the dropped records by $id.
+    return fetchAll(THIS_APP, '', ['$id', F.a23id, F.status, F.inEdit, F.order])
       .then(function (existing) {
         var byKey = {};
         var maxOrder = 0;
@@ -586,7 +589,7 @@
         return '"' + String(m).replace(/"/g, '') + '"';
       });
       i += 100;
-      return fetchAll(APP_MASTER, '$id in (' + slice.join(',') + ')', [A23.profileStatus])
+      return fetchAll(APP_MASTER, '$id in (' + slice.join(',') + ')', ['$id', A23.profileStatus])
         .then(function (recs) {
           recs.forEach(function (m) { map[m.$id.value] = valOf(m, A23.profileStatus); });
           return next();
@@ -743,7 +746,7 @@
   // record is updated in place (status -> In Queue); cadence and order are kept.
   function queueDueReviews() {
     busy(true, 'Finding records due for review...');
-    return fetchAll(THIS_APP, dueQuery(), [F.a23id, F.order, F.cadence]).then(function (due) {
+    return fetchAll(THIS_APP, dueQuery(), ['$id', F.a23id, F.order, F.cadence]).then(function (due) {
       if (!due.length) { busy(false); toast('Nothing is due for review.'); return 0; }
       // map this-app record by master id so we can update in place
       var byMaster = {};
