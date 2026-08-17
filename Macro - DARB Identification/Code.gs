@@ -8,20 +8,28 @@
  *    contents with the provided appsscript.json.
  * 3. Reload the workbook. The "DARB Pipeline" menu appears and all tabs scaffold.
  *
- * MENU
+ * MENU (routing runs FIRST - see "STEP ORDER" below)
+ *   Process Reviews          - sweep ALL intern tabs and route every reviewed row to its
+ *                              destination list. Step 1 of the cycle.
+ *   Refresh DB References    - rebuild Current DB + Watchlist from the Kintone export
+ *                              (ticker-less rows go to hidden "No Ticker Reference")
  *   Import Pull Files        - upload AlphaSense Search Summary CSV or XLSX exports
  *                              (RAW tabs hidden)
  *   Build Clean Pull         - stack, clean, dedupe all RAW tabs (auto-runs after import)
- *   Refresh DB References    - rebuild Current DB + Watchlist from the Kintone export
- *                              (ticker-less rows go to hidden "No Ticker Reference")
- *   Run Crosscheck           - replicate RunSort: SORT / REVIEW / EXCLUDED
+ *   Run Crosscheck           - replicate RunSort: SORT / EXCLUDED
  *   Distribute Selected      - hand checked Sort rows to interns (Date Assigned + Due Date)
  *   Clean-up This Tab        - route reviewed rows on the intern tab you have open
- *   Process Reviews          - sweep ALL intern tabs (backstop)
  *   Build Kintone Upload     - format qualified Adds into the single Kintone Upload tab
  *                              (parent profile + Website URLs + Source Documents subtables)
  *   Download Kintone CSV     - download the Kintone Upload tab as a UTF-8 CSV
  *   Rescaffold Tabs          - force-rewrite headers + formatting + dropdowns
+ *
+ * STEP ORDER
+ *   Routing (Process Reviews) is step 1: every reviewed intern row must reach its
+ *   destination list BEFORE Refresh DB References / Import / Crosscheck run, otherwise the
+ *   crosscheck cannot see those decisions and re-surfaces already-reviewed companies as new.
+ *   Refresh / Import / Crosscheck each auto-run the sweep and warn when reviewed rows are
+ *   still unrouted (preflightRouteReviews_).
  *
  * CONFIG TAB
  *   "Ticker flag keywords" - comma-separated, default ".IN". The Ticker Flag column
@@ -194,6 +202,7 @@ var TAB_ROLE = {
   'Excluded': 'action',
   'Current DB': 'reference', 'Watchlist': 'reference', 'FR Exclude': 'reference',
   'Confirmed Exclude': 'reference', 'No Ticker Reference': 'reference',
+  'In DB Reference': 'reference',
   'Adds': 'output', 'Kintone Upload': 'output',
   'History Log': 'audit',
   'Dashboard': 'guide'
@@ -218,25 +227,30 @@ var CONFIG_DEFAULTS = [
   ['Re-review tickers older than (days)', 365],
   ['Resurface tickers with no reviewed date (Yes/No)', 'No']
 ];
-/* Operator dashboard: the numbered pipeline steps tracked on the Dashboard's status table. */
+/* Operator dashboard: the numbered pipeline steps tracked on the Dashboard's status table.
+ * ROUTING RUNS FIRST. Process Reviews used to sit at step 6, after the crosscheck had
+ * already decided what was "new" - so any row an analyst had reviewed but not yet routed was
+ * invisible to Crosscheck and came back onto Sort as a fresh name. It is now step 1, and the
+ * Refresh / Import / Crosscheck entry points re-run it (and warn on leftovers) before they
+ * touch the reference data. */
 var PIPELINE_STEPS = [
-  '1. Refresh DB References',
-  '2. Import Pull Files',
-  '3. Run Crosscheck',
-  '4. Distribute Selected to Interns',
-  '5. Clean-up This Intern Tab',
-  '6. Process Reviews',
+  '1. Process Reviews (route all intern tabs)',
+  '2. Refresh DB References',
+  '3. Import Pull Files',
+  '4. Run Crosscheck',
+  '5. Distribute Selected to Interns',
+  '6. Clean-up This Intern Tab',
   '7. Build Kintone Upload',
   '8. Download Kintone Upload CSV'
 ];
 /* logHistory_ action -> the pipeline step it completes (drives the Status tab Done marks). */
 var STEP_BY_ACTION = {
-  'Refresh DB References': '1. Refresh DB References',
-  'Build Clean Pull': '2. Import Pull Files',
-  'Run Crosscheck': '3. Run Crosscheck',
-  'Distribute Selected': '4. Distribute Selected to Interns',
-  'Clean-up This Tab': '5. Clean-up This Intern Tab',
-  'Process Reviews': '6. Process Reviews',
+  'Process Reviews': '1. Process Reviews (route all intern tabs)',
+  'Refresh DB References': '2. Refresh DB References',
+  'Build Clean Pull': '3. Import Pull Files',
+  'Run Crosscheck': '4. Run Crosscheck',
+  'Distribute Selected': '5. Distribute Selected to Interns',
+  'Clean-up This Tab': '6. Clean-up This Intern Tab',
   'Build Kintone Upload': '7. Build Kintone Upload'
 };
 
@@ -253,6 +267,13 @@ var TABS = {
   confirmedExclude: { name: 'Confirmed Exclude', header: REF_SCHEMA.concat(['Select', 'Move To']) },
   noTicker: { name: 'No Ticker Reference', header: ['Company Name', 'Source Bucket',
     'Record Number', 'Sector'] },
+  /* Durable record of "reviewed -> already In DB" decisions. 'In DB' used to write nothing
+     at all: the pull row that triggered the review is normally a NEW ticker or spelling for a
+     company Kintone already holds under a different one, and Current DB is rebuilt from the
+     export every refresh, so the decision left no trace and the same near-match resurfaced on
+     Sort every single cycle. Crosscheck now treats this list as an exclude list (and the
+     stale-date rule can still bring a row back for a periodic re-check). REF_SCHEMA layout. */
+  inDbRef: { name: 'In DB Reference', header: REF_SCHEMA.slice() },
   adds: { name: 'Adds', header: ['Imported?', 'Select', 'Analyst', 'New Record Flag',
     'AS Business Name', 'Primary Business Name', 'AlphaSense Ticker',
     'Profile Review - Action Status', 'CRBM Tier', 'Pure-Play', 'Sector',
@@ -313,13 +334,14 @@ var DEFAULT_INTERNS = [];
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('DARB Pipeline')
-    .addItem('1. Refresh DB References', 'showRefreshDialog')
-    .addItem('2. Import Pull Files (CSV / XLSX)', 'showCsvImportDialog')
-    .addItem('3. Run Crosscheck', 'runCrosscheck')
+    .addItem('1. Process Reviews (route all intern tabs)', 'processReviews')
     .addSeparator()
-    .addItem('4. Distribute Selected to Interns', 'distributeSelected')
-    .addItem('5. Clean-up This Intern Tab', 'cleanupActiveTab')
-    .addItem('6. Process Reviews (backstop)', 'processReviews')
+    .addItem('2. Refresh DB References', 'showRefreshDialog')
+    .addItem('3. Import Pull Files (CSV / XLSX)', 'showCsvImportDialog')
+    .addItem('4. Run Crosscheck', 'runCrosscheck')
+    .addSeparator()
+    .addItem('5. Distribute Selected to Interns', 'distributeSelected')
+    .addItem('6. Clean-up This Intern Tab', 'cleanupActiveTab')
     .addSeparator()
     .addItem('Move selected rows between lists', 'moveSelected')
     .addSeparator()
@@ -332,6 +354,7 @@ function onOpen() {
       .addItem('Import legacy Watchlist (one-time)', 'showWatchlistImportDialog')
       .addItem('Rescaffold / Restyle Tabs', 'rescaffold')
       .addItem('Start New Cycle (reset step checkmarks)', 'startNewCycle')
+      .addItem('Clear Sort queue (discard untriaged rows)', 'clearSortQueue')
       .addSeparator()
       .addItem('Re-apply Tier/Sector rules (active tab)', 'reapplyTierRules')
       .addItem('Check Tier/Sector rules (active tab)', 'checkTierRules')
@@ -435,22 +458,34 @@ var WORKFLOW_LINES = [
   'Run these from the "DARB Pipeline" menu, in order. The status table at the top of this',
   'Dashboard tab shows which steps have run this cycle (Last Run, Result, Done This Cycle).',
   '',
-  '1. Refresh DB References - upload the latest Kintone export (.xlsx). Rebuilds Current DB and',
+  '1. Process Reviews - ROUTE FIRST. Sweeps every intern tab and files each reviewed row to its',
+  '   destination list (Adds / Watchlist / FR Exclude / Confirmed Exclude / In DB Reference).',
+  '   Nothing else runs first: a reviewed row that has not been routed is invisible to the',
+  '   crosscheck and comes back onto Sort as if it were new. Steps 2-4 re-run this sweep',
+  '   automatically and warn you if any reviewed row still could not be routed.',
+  '2. Refresh DB References - upload the latest Kintone export (.xlsx). Rebuilds Current DB and',
   '   merges the Watchlist (locally added rows kept; rows now Active graduate off).',
-  '2. Import Pull Files - upload AlphaSense Search Summary exports (CSV/XLSX). Builds Clean Pull.',
-  '3. Run Crosscheck - sorts Clean Pull into Sort and Excluded (already tracked). New names',
+  '3. Import Pull Files - upload AlphaSense Search Summary exports (CSV/XLSX). Builds Clean Pull.',
+  '4. Run Crosscheck - sorts Clean Pull into Sort and Excluded (already tracked). New names',
   '   AND near-matches both land on Sort: near-matches are tagged "Review" in the Source',
   '   column (matched name in the Note); DB-drift cases tagged "DB Drift". No separate Review tab.',
-  '4. Distribute Selected to Interns - on the Sort tab, tick Select, then either:',
+  '   Rows already sitting on Sort are KEPT (with your Select ticks and Assign To), and anything',
+  '   already out with an analyst is held back - so nothing in flight is re-issued as new.',
+  '5. Distribute Selected to Interns - on the Sort tab, tick Select, then either:',
   '     - set Assign To (an analyst) and run Distribute, to hand the row to that analyst (a review tab named by first name); or',
   '     - set Move To (Watchlist / FR Exclude / Confirmed Exclude / Remove) and run "Move selected',
   '       rows between lists" to file it directly - no analyst needed (e.g. an obvious non-DARB name).',
-  '5. Clean-up This Intern Tab - open your review tab (your first name), set Review Assignement per row',
+  '6. Clean-up This Intern Tab - open your review tab (your first name), set Review Assignement per row',
   '   (Add / Watchlist / FR Exclude / Confirmed Exclude / In DB), then run to route them.',
-  '6. Process Reviews - backstop sweep that routes eligible rows across ALL intern tabs.',
+  '   (Step 1 is the same routing sweep across every tab at once.)',
   '7. Build Kintone Upload - formats qualified Adds into the single "Kintone Upload" tab.',
   '8. Download Kintone Upload CSV - download it and import into Kintone.',
   '   After importing, run "Clear Adds" to empty the Adds tab for the next batch.',
+  '',
+  'An "Add" writes TWO rows: the staging row on Adds (what goes to Kintone) and a companion',
+  '"Pending Kintone Add" hold row on the Watchlist. Both are expected - the hold row keeps the',
+  'ticker out of next week\'s pull and graduates off automatically once the profile is Active in',
+  'the DB. The hold row never replaces the Adds row.',
   '',
   'Analyst capture formats (on your review tab):',
   '   Website URLs - one per line:   Type | URL',
@@ -474,6 +509,10 @@ function ensureDashboardTab_(force) {
   var built = sh && String(sh.getRange(1, 1).getValue()).trim() !== '';
 
   if (built) deleteLegacyDashboardTabs_();   // data already migrated - clean up any stragglers
+  // Runtime migration for the step renumber (routing moved to step 1): a dashboard built
+  // against the old labels has no row for the new ones, so markStep_ would silently no-op and
+  // the status table would read the old order forever. Rebuild it (Settings values preserved).
+  if (built && !force && !dashboardStepsCurrent_(sh)) force = true;
   if (built && !force) return;
 
   // Preserve dynamic state: per-step status + edited settings. Read the existing dashboard first,
@@ -494,6 +533,12 @@ function ensureDashboardTab_(force) {
   if (isNew) { try { ss.setActiveSheet(sh); ss.moveActiveSheet(1); } catch (e) { /* limited auth */ } } // dashboard leads
   deleteLegacyDashboardTabs_();              // legacy tabs now merged in
   return sh;
+}
+
+/** True when the dashboard's status table carries a row for every current pipeline step
+ *  (false after a step renumber - the caller then forces a rebuild). */
+function dashboardStepsCurrent_(sh) {
+  return PIPELINE_STEPS.every(function (label) { return dashboardStepRow_(sh, label) > 0; });
 }
 
 /** Delete the former Pipeline Status / Config / Workflow tabs. Skips any that is currently the
@@ -590,7 +635,14 @@ var TAB_HELP = {
     'OR set Move To + run "Move selected rows between lists" (file it directly - no analyst).',
   'Adds': 'STAGING for Kintone adds - one row per qualified profile (auto-created when an analyst\n' +
     'routes a Sort row to "Add"). Fill in Website URLs / Source Documents, then run Build Kintone\n' +
-    'Upload. Imported? auto-ticks once the profile shows up in Current DB.',
+    'Upload. Imported? auto-ticks once the profile shows up in Current DB.\n' +
+    'Every Add also gets a companion "Pending Kintone Add" hold row on the Watchlist - that is by\n' +
+    'design and does NOT replace this row. If a profile is on the Watchlist but missing here, run\n' +
+    'Process Reviews: it re-stages any Add whose staging row went missing.',
+  'In DB Reference': 'REFERENCE - companies an analyst reviewed and marked "In DB" (already in\n' +
+    'Kintone, usually under a different ticker or spelling). Current DB is rebuilt from the export\n' +
+    'every refresh, so this list is what keeps those aliases from re-surfacing on Sort each week.\n' +
+    'Safe to leave alone; delete a row only to force the company back through review.',
   'Dashboard': 'HOME - the operating guide (bottom), pipeline-step status (top), and Settings.\n' +
     'Edit ONLY the Settings "Value" column; keep the Setting names unchanged:\n' +
     '- Exclude pull tickers containing: comma-separated text (e.g. .IN); pull tickers containing\n' +
@@ -606,7 +658,9 @@ var TAB_HELP = {
     'truth for "already tracked". Do not hand-edit (it is overwritten on every refresh).',
   'Watchlist': 'REFERENCE - names being monitored that are NOT yet in the DB. A row that becomes\n' +
     'Active in the DB graduates off automatically on the next refresh, so adding an already-in-DB\n' +
-    'ticker here will not stick.'
+    'ticker here will not stick.\n' +
+    'Rows with Review Assignement "Add" and a "Pending Kintone Add" note are HOLD rows for a\n' +
+    'profile staged on the Adds tab - they graduate off once the profile is imported and Active.'
 };
 
 /** Set the per-tab "how to use" hover note on each tab's top-left header cell. */
@@ -1241,9 +1295,10 @@ function sanitizeName_(filename) {
     .replace(/\s+/g, ' ').trim().slice(0, 85);
 }
 
-/* ========================== STEP 1 - CONSOLIDATE & CLEAN PULL ======================= */
+/* ==================== STEP 3 - CONSOLIDATE & CLEAN PULL (IMPORT) =================== */
 
 function showCsvImportDialog() {
+  if (!preflightRouteReviews_('Import Pull Files')) return;   // route reviewed rows first
   var html = HtmlService.createHtmlOutput(
     '<div style="font-family:Calibri,Arial,sans-serif;font-size:13px">' +
     '<p>Select one or more AlphaSense Search Summary exports - CSV or Excel (.xlsx), ' +
@@ -1280,6 +1335,7 @@ function showCsvImportDialog() {
 function importPullFiles(files) {
   if (!files || !files.length) throw new Error('No files received.');
   scaffoldAll_();
+  autoRouteReviewsQuietly_('Import Pull Files');   // step 1 first, even when called directly
   var ss = SpreadsheetApp.getActive();
   files.forEach(function (f) {
     var data;
@@ -1416,9 +1472,10 @@ function buildCleanPull() {
   toast_('Clean Pull rebuilt: ' + rows.length + ' rows.');
 }
 
-/* ====================== STEP 1.5 - REFRESH DB REFERENCES ============================ */
+/* ======================= STEP 2 - REFRESH DB REFERENCES ============================= */
 
 function showRefreshDialog() {
+  if (!preflightRouteReviews_('Refresh DB References')) return;   // route reviewed rows first
   var html = HtmlService.createHtmlOutput(
     '<div style="font-family:Calibri,Arial,sans-serif;font-size:13px">' +
     '<p>Select the latest AlphaSense Ticker export workbook (.xlsx).<br>' +
@@ -1460,6 +1517,10 @@ function showRefreshDialog() {
 function refreshDbReferences(file) {
   if (!file || !file.data) throw new Error('No file received.');
   scaffoldAll_();
+  // STEP ORDER: route every reviewed intern row before the reference lists are rebuilt, so
+  // this refresh sees those decisions (the dialog entry point already asked; this covers a
+  // direct/scripted call). No UI here - we are inside a modal.
+  autoRouteReviewsQuietly_('Refresh DB References');
   var bytes = Utilities.base64Decode(file.data);
   var tempId = convertXlsxToSheet_(bytes, file.name);
   var activeRows = [], watchRows = [], noTickerRows = [];
@@ -1738,7 +1799,47 @@ function importLegacyWatchlist(file) {
     ' skipped (already present or blank).';
 }
 
-/* ===================== STEP 2 - CROSSCHECK & CATEGORISE (RunSort) =================== */
+/* ===================== STEP 4 - CROSSCHECK & CATEGORISE (RunSort) =================== */
+
+/* Reference lists consulted by Run Crosscheck. Every column index is declared here, per list,
+ * 0-based. The previous code read one hardcoded r[3] as "reviewed date" for EVERY list - on
+ * Current DB that column is CRBM Tier, not a date (harmless only because Current DB is not
+ * reviewable). Declaring them per list means a future mid-schema insertion on one tab cannot
+ * silently shift another tab's reads.
+ *   reviewedCol  -1 when the list carries no reviewed date (never goes stale)
+ *   reviewable   true  -> a stale reviewed date resurfaces the ticker onto Sort
+ *   nearMatch    true  -> feeds the fuzzy-name / ticker-root "confirm new vs same" check
+ *   nameExclude  true  -> an exact normalized-name match EXCLUDES. Without this, an
+ *                         already-reviewed company whose ticker changed (new listing, added
+ *                         exchange suffix, AlphaSense re-symbol) came back as a brand-new
+ *                         name every week.
+ * Adds is a reference list: a profile staged for Kintone is not in the export yet, so nothing
+ * else in the crosscheck knows about it until the following refresh. */
+var CROSSCHECK_REFS = [
+  { name: 'Current DB', width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
+    reviewedCol: -1, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: 11,
+    reviewable: false, nearMatch: true, nameExclude: false },
+  { name: 'Watchlist', width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
+    reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: 11,
+    reviewable: true, nearMatch: false, nameExclude: true },
+  { name: 'FR Exclude', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true },
+  { name: 'Confirmed Exclude', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true },
+  { name: 'In DB Reference', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true },
+  /* Adds: 4 AS Business Name | 5 Primary Business Name | 6 AlphaSense Ticker | 8 CRBM Tier |
+     10 Sector | 2 Analyst. Not reviewable - a staged profile is pending import, not stale. */
+  { name: 'Adds', width: 17, nameCol: 4, altNameCol: 5, tickerCol: 6, isinCol: -1,
+    reviewedCol: -1, tierCol: 8, analystCol: 2, noteCol: -1, sectorCol: 10,
+    reviewable: false, nearMatch: false, nameExclude: true }
+];
+
+/** Read a declared reference column from a row ('' when the list has no such column). */
+function refCell_(r, i) { return (i >= 0 && i < r.length) ? r[i] : ''; }
 
 /**
  * Replicates the legacy RunSort logic, extended for changed tickers / names:
@@ -1746,25 +1847,35 @@ function importLegacyWatchlist(file) {
  *        name drifted vs DB name                -> also surfaced on SORT (Source "DB Drift")
  *   b. ISIN match (when ISINs exist in the DB)  -> EXCLUDED (Match Type: ISIN)
  *        same security, ticker changed          -> also surfaced on SORT (Source "DB Drift")
- *   c. exact normalized-name match              -> REVIEW (Exact name)
- *   d. first word (>=4 chars) + fuzzy-confirm
+ *   c. exact name on a REVIEWED list
+ *      (Watchlist / excludes / In DB / Adds)    -> EXCLUDED (Match Type: Name)
+ *   d. exact normalized-name match vs Current DB-> SORT (Source "Review", confirm new vs same)
+ *   e. first word (>=4 chars) + fuzzy-confirm
  *      (first-5-chars OR containment OR
- *       first-two-words)                        -> REVIEW (Fuzzy name)
- *   e. ticker root match (same symbol, other
- *      exchange suffix, root >= 3 chars)        -> REVIEW (Ticker root)
- *   f. otherwise                                -> SORT (definitely new)
- * Near-match (c/d/e) only considers Current DB records (incl. its hidden No-Ticker rows);
- * Watchlist / FR Exclude / Confirmed Exclude are still exact-excluded but not fuzzy-matched.
+ *       first-two-words)                        -> SORT (Source "Review")
+ *   f. ticker root match (same symbol, other
+ *      exchange suffix, root >= 3 chars)        -> SORT (Source "Review")
+ *   g. otherwise                                -> SORT (definitely new)
+ * Near-match (d/e/f) only considers Current DB records (incl. its hidden No-Ticker rows).
  * ISIN matching activates automatically once the Kintone export includes an ISIN column.
+ *
+ * Nothing already in the pipeline is re-issued as new:
+ *   - rows already on Sort are CARRIED FORWARD (Select ticks and Move To choices intact) and
+ *     the new pull is deduped against them;
+ *   - companies sitting un-reviewed on an analyst tab are held back ("in flight");
+ *   - a stale ticker resurfaced for re-review is NO LONGER deleted from its reference list.
+ *     Deleting it destroyed the review history, so the next crosscheck saw a brand-new name.
  */
 function runCrosscheck() {
   scaffoldAll_();
-  if (!stepGuard_(3)) return;
+  if (!stepGuard_(4)) return;
+  if (!preflightRouteReviews_('Run Crosscheck')) return;
   var ss = SpreadsheetApp.getActive();
-  var tickerMap = {};    // normalized ticker -> { source, name }
+  var tickerMap = {};    // normalized ticker -> reference entry
   var rootMap = {};      // ticker root       -> { ticker, name, source }
   var isinMap = {};      // ISIN              -> { name, ticker, source }
-  var nameMap = {};      // normalized name   -> { orig, source, ticker }
+  var nameMap = {};      // normalized name   -> { orig, source, ticker }   (Current DB only)
+  var nameExclMap = {};  // normalized name   -> reference entry (reviewed lists)
   var firstWordIdx = {}; // first word        -> [{ norm, orig, source, ticker }]
 
   function addName_(n, source, ticker) {
@@ -1782,41 +1893,41 @@ function runCrosscheck() {
   var resurfaceBlank = resurfaceBlank_();
   var tz = Session.getScriptTimeZone();
 
-  // nearMatch = include this list in the fuzzy name / ticker-root REVIEW check. Only Current DB
-  // qualifies (per request); the others still exact-exclude by ticker/ISIN but are not fuzzy-matched.
-  var refDefs = [
-    { name: 'Current DB', isin: true, reviewable: false, nearMatch: true },
-    { name: 'Watchlist', isin: true, reviewable: true, nearMatch: false },
-    { name: 'FR Exclude', isin: false, reviewable: true, nearMatch: false },
-    { name: 'Confirmed Exclude', isin: false, reviewable: true, nearMatch: false }
-  ];
-  refDefs.forEach(function (def) {
+  CROSSCHECK_REFS.forEach(function (def) {
     var sh = ss.getSheetByName(def.name);
     if (!sh) return;
     var lr = sh.getLastRow();
     if (lr < 2) return;
-    var width = def.isin ? Math.min(13, sh.getMaxColumns()) : Math.min(10, sh.getMaxColumns());
+    var width = Math.min(def.width, sh.getMaxColumns());
     sh.getRange(2, 1, lr - 1, width).getValues().forEach(function (r) {
-      var n = String(r[0] || '').trim();
-      var t = normTicker_(r[1]);
+      var n = String(refCell_(r, def.nameCol) || '').trim();
+      var alt = String(refCell_(r, def.altNameCol) || '').trim();
+      var t = normTicker_(refCell_(r, def.tickerCol));
+      if (!n && !alt && !t) return;
+      var entry = {
+        source: def.name, name: n || alt, reviewable: def.reviewable,
+        reviewed: def.reviewedCol >= 0 ? refCell_(r, def.reviewedCol) : '',
+        tier: refCell_(r, def.tierCol), analyst: refCell_(r, def.analystCol),
+        note: refCell_(r, def.noteCol), sector: refCell_(r, def.sectorCol)
+      };
       if (t) {
-        if (tickerMap[t] === undefined) {
-          tickerMap[t] = {
-            source: def.name, name: n, reviewable: def.reviewable,
-            reviewed: r[3], tier: r[6], analyst: r[4], note: r[8],
-            sector: def.isin ? (r[11] || '') : ''
-          };
-        }
+        if (tickerMap[t] === undefined) tickerMap[t] = entry;
         var root = tickerRoot_(t);
         if (def.nearMatch && root.length >= 3 && rootMap[root] === undefined) {
-          rootMap[root] = { ticker: t, name: n, source: def.name };
+          rootMap[root] = { ticker: t, name: entry.name, source: def.name };
         }
       }
-      if (def.isin && width >= 13) {
-        var isin = String(r[12] || '').trim().toUpperCase();
+      if (def.isinCol >= 0) {
+        var isin = String(refCell_(r, def.isinCol) || '').trim().toUpperCase();
         if (isin && isin !== '-' && isinMap[isin] === undefined) {
-          isinMap[isin] = { name: n, ticker: t, source: def.name };
+          isinMap[isin] = { name: entry.name, ticker: t, source: def.name };
         }
+      }
+      if (def.nameExclude) {
+        [n, alt].forEach(function (x) {
+          var nn = normName_(x);
+          if (nn && nameExclMap[nn] === undefined) nameExclMap[nn] = entry;
+        });
       }
       if (def.nearMatch && n) addName_(n, def.name, t);
     });
@@ -1832,13 +1943,59 @@ function runCrosscheck() {
     });
   }
 
+  // In flight = handed to an analyst and not yet routed. These rows are NOT on any reference
+  // list yet (that only happens when they are routed), so without this they came straight back
+  // onto Sort as new names - the race the operators hit whenever a refresh ran mid-review.
+  var inFlight = {};
+  getInternSheets_().forEach(function (sh) {
+    var ilr = sh.getLastRow();
+    if (ilr < 2) return;
+    sh.getRange(2, 1, ilr - 1, 4).getValues().forEach(function (r) {
+      var n = String(r[0] || '').trim();
+      if (!n && !String(r[1] || '').trim()) return;
+      if (n === COMPLETED_MARKER) return;
+      if (r[3]) return;                     // already routed - its destination list covers it
+      var t = normTicker_(r[1]);
+      if (t) inFlight['t:' + t] = sh.getName();
+      var nn = normName_(n);
+      if (nn) inFlight['n:' + nn] = sh.getName();
+    });
+  });
+
+  // Carry the existing Sort queue forward. Blind-clearing it discarded untriaged rows (and the
+  // operator's Select / Assign To work) and let the same company be re-issued next run.
+  var sortSh = ensureTab_(TABS.sort);
+  var sortWidth = TABS.sort.header.length;
+  var carried = [], onSort = {};
+  var slr = sortSh.getLastRow();
+  if (slr >= 2) {
+    sortSh.getRange(2, 1, slr - 1, sortWidth).getValues().forEach(function (r) {
+      var c = String(r[0] || '').trim(), t = String(r[1] || '').trim();
+      if (!c && !t) return;
+      var nt = normTicker_(t), nn = normName_(c);
+      if ((nt && onSort['t:' + nt]) || (!nt && nn && onSort['n:' + nn])) return; // dedupe the queue
+      carried.push(r);
+      if (nt) onSort['t:' + nt] = true;
+      if (nn) onSort['n:' + nn] = true;
+    });
+  }
+
   var cp = ss.getSheetByName(TABS.cleanPull.name);
   var lr = cp ? cp.getLastRow() : 0;
   if (lr < 2) { toast_('Clean Pull is empty - run Build Clean Pull first.'); return; }
   var input = cp.getRange(2, 1, lr - 1, 4).getValues(); // Company | Ticker | CIK | ISIN
 
   var sortRows = [], exclRows = [], considered = 0, drift = 0, nearMatch = 0, flagged = 0;
-  var resurrected = 0, resurrectedByTab = {};
+  var resurrected = 0, held = 0, alreadyQueued = 0;
+
+  /** Queue a Sort row unless the company is already queued (carried or added this run). */
+  function pushSort_(nt, nn, row) {
+    if ((nt && onSort['t:' + nt]) || (!nt && nn && onSort['n:' + nn])) { alreadyQueued++; return; }
+    if (nt) onSort['t:' + nt] = true;
+    if (nn) onSort['n:' + nn] = true;
+    sortRows.push(row);
+  }
+
   input.forEach(function (r) {
     var company = String(r[0] || '').trim();
     var ticker = String(r[1] || '').trim();
@@ -1850,23 +2007,32 @@ function runCrosscheck() {
     var isin = String(r[3] || '').trim().toUpperCase();
     if (isin === '-') isin = '';
 
+    var flightTab = (nt && inFlight['t:' + nt]) || (nn && inFlight['n:' + nn]);
+    if (flightTab) {                                         // out with an analyst - not new
+      exclRows.push([company, ticker, 'In review: ' + flightTab, 'In flight']);
+      held++;
+      return;
+    }
+
     if (tickerMap[nt] !== undefined) {                       // a. exact ticker
       var ex = tickerMap[nt];
       if (ex.reviewable && isStale_(ex.reviewed, thresholdDays, resurfaceBlank)) {
         var dstr = (ex.reviewed instanceof Date)
           ? Utilities.formatDate(ex.reviewed, tz, 'yyyy-MM-dd') : 'no date';
-        var rnote = 'Re-review: was on ' + ex.source + ', last reviewed ' + dstr +
+        var rnote = 'Re-review: still listed on ' + ex.source + ', last reviewed ' + dstr +
           ' (> ' + thresholdDays + 'd)' + (ex.note ? ' - ' + ex.note : '');
-        sortRows.push([company, ticker, '', '', '', '', '', '', '', '', ex.tier || '', ex.sector || '',
-          ex.source, rnote]);                                //    stale -> back to Sort
-        (resurrectedByTab[ex.source] = resurrectedByTab[ex.source] || {})[nt] = true;
+        //    stale -> back to Sort. The reference row STAYS put: deleting it (as the previous
+        //    build did) threw away the review history, so the next crosscheck saw a new name.
+        //    Routing the re-reviewed row stamps the existing reference row in place.
+        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', ex.tier || '',
+          ex.sector || '', ex.source, rnote]);
         resurrected++;
         return;
       }
       exclRows.push([company, ticker, ex.source, 'Ticker']);
       var en = normName_(ex.name);
       if (nn && en && nn !== en && !fuzzyPair_(nn, en)) {    //    name drifted -> also surface on Sort
-        sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
+        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
           'Name changed - same ticker as "' + ex.name + '" on ' + ex.source +
           '. Update the DB name, or move to a list.']);
         drift++;
@@ -1876,51 +2042,79 @@ function runCrosscheck() {
     if (isin && isinMap[isin] !== undefined) {               // b. same ISIN, new ticker
       var im = isinMap[isin];
       exclRows.push([company, ticker, im.source, 'ISIN']);
-      sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
+      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
         'Ticker changed - same ISIN as ' + im.ticker + ' "' + im.name + '" on ' + im.source +
         '. Update the DB ticker, or move to a list.']);
       drift++;
       return;
     }
-    if (nn && nameMap[nn] !== undefined) {                   // c. exact name -> Sort (near-match)
+    if (nn && nameExclMap[nn] !== undefined) {               // c. exact name on a reviewed list
+      var xm = nameExclMap[nn];
+      if (xm.reviewable && isStale_(xm.reviewed, thresholdDays, resurfaceBlank)) {
+        var xstr = (xm.reviewed instanceof Date)
+          ? Utilities.formatDate(xm.reviewed, tz, 'yyyy-MM-dd') : 'no date';
+        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', xm.tier || '',
+          xm.sector || '', xm.source,
+          'Re-review: name matches "' + xm.name + '" on ' + xm.source + ', last reviewed ' +
+          xstr + ' (> ' + thresholdDays + 'd). Ticker differs - confirm same security.']);
+        resurrected++;
+        return;
+      }
+      //    Already reviewed under this name; only the ticker string differs (new listing,
+      //    exchange suffix, AlphaSense re-symbol). Excluding it is what stops reviewed
+      //    companies from reappearing on Sort week after week.
+      exclRows.push([company, ticker, xm.source, 'Name']);
+      return;
+    }
+    if (nn && nameMap[nn] !== undefined) {                   // d. exact name vs Current DB
       var nm = nameMap[nn];
-      sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
         'Near-match (exact name) vs "' + nm.orig + '" on ' + nm.source +
         (nm.ticker ? ' (' + nm.ticker + ')' : '') + ' - confirm new vs same.']);
       nearMatch++;
       return;
     }
     var fw = nn ? nn.split(' ')[0] : '';
-    if (fw.length >= 4 && firstWordIdx[fw]) {                // d. fuzzy name -> Sort (near-match)
+    if (fw.length >= 4 && firstWordIdx[fw]) {                // e. fuzzy name -> Sort (near-match)
       var m = fuzzyConfirm_(nn, firstWordIdx[fw]);
       if (m) {
-        sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
           'Near-match (fuzzy name) vs "' + m.orig + '" on ' + m.source +
           (m.ticker ? ' (' + m.ticker + ')' : '') + ' - confirm new vs same.']);
         nearMatch++;
         return;
       }
     }
-    var root = tickerRoot_(nt);                              // e. ticker root -> Sort (near-match)
+    var root = tickerRoot_(nt);                              // f. ticker root -> Sort (near-match)
     if (root.length >= 3 && rootMap[root] !== undefined && rootMap[root].ticker !== nt) {
       var rm = rootMap[root];
-      sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
         'Near-match (ticker root) vs "' + rm.name + '" on ' + rm.source +
         (rm.ticker ? ' (' + rm.ticker + ')' : '') + ' - possible listing/ticker change.']);
       nearMatch++;
       return;
     }
-    sortRows.push([company, ticker, '', '', '', '', '', '', '', '', '', '', 'AS Pull', '']); // f. definitely new (from the AlphaSense pull)
+    // g. definitely new (from the AlphaSense pull)
+    pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'AS Pull', '']);
   });
 
-  // Rebuild outputs (script-owned tabs only)
-  var sortSh = ensureTab_(TABS.sort);
+  // Rebuild outputs (script-owned tabs only). Carried rows keep their position at the top.
+  var allSort = carried.concat(sortRows);
   clearBody_(sortSh);
-  if (sortRows.length) {
-    sortSh.getRange(2, 1, sortRows.length, 14).setValues(sortRows);
+  if (allSort.length) {
+    sortSh.getRange(2, 1, allSort.length, sortWidth).setValues(allSort);
   }
-  applyFormat_(sortSh, TABS.sort.header.length);
+  applyFormat_(sortSh, sortWidth);
   forceMoveCheckboxes_(['Sort']);   // Select + Move To
+  // forceMoveCheckboxes_ clears cell values as it rebuilds the checkboxes, so restore the
+  // carried Select ticks and Move To choices afterwards - a re-run must never silently
+  // untick rows an operator has already selected.
+  if (allSort.length) {
+    sortSh.getRange(2, 3, allSort.length, 1)
+      .setValues(allSort.map(function (r) { return [r[2] === true]; }));
+    sortSh.getRange(2, 4, allSort.length, 1)
+      .setValues(allSort.map(function (r) { return [r[3] || '']; }));
+  }
   refreshSortValidations_();        // Assign To + Tier + Sector
 
   var exSh = ensureTab_(TABS.excluded);
@@ -1930,38 +2124,39 @@ function runCrosscheck() {
 
   forceMoveCheckboxes_(['Excluded']);
 
-  // Resurrected stale tickers now live on Sort - drop them from their reference list.
-  Object.keys(resurrectedByTab).forEach(function (tn) {
-    removeTickersFromRefTab_(tn, resurrectedByTab[tn]);
-  });
-
   logHistory_('Run Crosscheck', 'Clean Pull', considered + ' in - ' + sortRows.length +
-    ' SORT (incl ' + resurrected + ' re-review, ' + drift + ' DB drift, ' + nearMatch +
-    ' near-match), ' + exclRows.length + ' EXCLUDED' +
+    ' new to SORT (incl ' + resurrected + ' re-review, ' + drift + ' DB drift, ' + nearMatch +
+    ' near-match), ' + carried.length + ' carried forward on Sort, ' +
+    exclRows.length + ' EXCLUDED (incl ' + held + ' in flight with an analyst)' +
+    (alreadyQueued ? ', ' + alreadyQueued + ' already queued on Sort' : '') +
     (flagged ? ', ' + flagged + ' skipped (flagged ticker)' : ''));
-  toast_('Crosscheck: ' + sortRows.length + ' SORT' +
-    (nearMatch ? ' (incl ' + nearMatch + ' near-match)' : '') +
-    (resurrected ? ' (' + resurrected + ' re-review)' : '') +
-    (drift ? ' (' + drift + ' DB drift)' : '') + ', ' +
+  toast_('Crosscheck: ' + sortRows.length + ' new to SORT' +
+    (carried.length ? ' (+' + carried.length + ' carried)' : '') +
+    (nearMatch ? ', ' + nearMatch + ' near-match' : '') +
+    (resurrected ? ', ' + resurrected + ' re-review' : '') +
+    (drift ? ', ' + drift + ' DB drift' : '') + '; ' +
     exclRows.length + ' EXCLUDED' +
+    (held ? ' (' + held + ' in flight)' : '') +
     (flagged ? ', ' + flagged + ' flagged-ticker skipped' : '') + '.');
 }
 
-/** Rewrite a reference list excluding rows whose normalized ticker is in tickerSet. */
-function removeTickersFromRefTab_(tabName, tickerSet) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(tabName);
-  if (!sh) return;
+/** Utilities: empty the Sort queue. Crosscheck now carries untriaged rows forward, so this is
+ *  the deliberate way to discard a stale queue (e.g. starting a clean cycle). */
+function clearSortQueue() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(TABS.sort.name);
+  if (!sh) { toast_('No Sort tab.'); return; }
   var lr = sh.getLastRow();
-  if (lr < 2) return;
-  var dataCols = MOVABLE[tabName] ? MOVABLE[tabName].selectCol - 1 : (headerLenByName_(tabName) || sh.getLastColumn());
-  var kept = sh.getRange(2, 1, lr - 1, dataCols).getValues().filter(function (r) {
-    var t = normTicker_(r[1]);
-    return !(t && tickerSet[t]);
-  });
+  if (lr < 2) { toast_('Sort is already empty.'); return; }
+  var n = lr - 1, ui = SpreadsheetApp.getUi();
+  if (ui.alert('Clear the Sort queue?',
+      'Discard all ' + n + ' row(s) on Sort? Rows that have not been distributed or moved to a ' +
+      'list will be gone (they can only come back via a future AlphaSense pull).',
+      ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   clearBody_(sh);
-  if (kept.length) sh.getRange(2, 1, kept.length, dataCols).setValues(kept);
-  applyFormat_(sh, headerLenByName_(tabName));
-  forceMoveCheckboxes_([tabName]);
+  applyFormat_(sh, TABS.sort.header.length);
+  logHistory_('Clear Sort Queue', TABS.sort.name, n + ' row(s) discarded');
+  toast_('Cleared ' + n + ' row(s) from Sort.');
 }
 
 /** Ticker root: symbol with any exchange suffix stripped (ABC.L -> ABC). */
@@ -2012,16 +2207,84 @@ function withDocLock_(fn) {
 }
 
 /* Public entry points (menu / on-sheet buttons) -> locked wrappers around the _impl_ body. */
-function distributeSelected() { if (!stepGuard_(4)) return; return withDocLock_(distributeSelected_impl_); }
-function cleanupActiveTab()   { if (!stepGuard_(5)) return; return withDocLock_(cleanupActiveTab_impl_); }
-function processReviews()     { if (!stepGuard_(6)) return; return withDocLock_(processReviews_impl_); }
+function distributeSelected() { if (!stepGuard_(5)) return; return withDocLock_(distributeSelected_impl_); }
+function cleanupActiveTab()   { if (!stepGuard_(6)) return; return withDocLock_(cleanupActiveTab_impl_); }
+function processReviews()     { return withDocLock_(processReviews_impl_); }   // step 1 - never gated
 function moveSelected()       { return withDocLock_(moveSelected_impl_); }
 
-/* ===================== STEP 3 - DISTRIBUTE, REVIEW & ROUTE ========================== */
+/* ===================== ROUTE-FIRST PRE-FLIGHT ======================================= */
+
+/**
+ * Rows an analyst has decided on (Review Assignement set) that have NOT reached their
+ * destination list yet (no Ticker Reviewed Date). These are exactly the rows that make the
+ * crosscheck treat an already-reviewed company as new, so every step that reads the
+ * reference data checks for them first. Returns one description per row.
+ */
+function unroutedReviewedRows_() {
+  var out = [];
+  getInternSheets_().forEach(function (sh) {
+    var lr = sh.getLastRow();
+    if (lr < 2) return;
+    sh.getRange(2, 1, lr - 1, INTERN_WIDTH).getValues().forEach(function (r, i) {
+      var c = String(r[0] || '').trim();
+      if (c === COMPLETED_MARKER) return;
+      if (!c && !String(r[1] || '').trim()) return;
+      if (!String(r[2] || '').trim()) return;   // not reviewed yet - nothing to route
+      if (r[3]) return;                         // routed (date stamped)
+      out.push(sh.getName() + '!' + (i + 2) + '  ' + (c || '(no name)') +
+        (r[1] ? ' [' + r[1] + ']' : '') + ' -> ' + String(r[2]).trim());
+    });
+  });
+  return out;
+}
+
+/**
+ * STEP-ORDER GUARD. Runs the routing sweep across every intern tab, then blocks (asks) if any
+ * reviewed row still could not be routed - typically a missing "If Add Recomended Tier".
+ * Called by the Refresh / Import / Crosscheck entry points so routing always happens first.
+ * Cheap when there is nothing to do: it only sweeps when unrouted reviewed rows exist.
+ * Returns true to continue, false when the operator chose to stop and fix the rows.
+ */
+function preflightRouteReviews_(stepName) {
+  if (!unroutedReviewedRows_().length) return true;
+  withDocLock_(function () {
+    return routeAllInternTabs_('Process Reviews', 'Pre-flight before ' + stepName);
+  });
+  var pend = unroutedReviewedRows_();
+  if (!pend.length) return true;
+  var ui = SpreadsheetApp.getUi();
+  return ui.alert('Reviewed rows are still unrouted',
+    pend.length + ' reviewed row(s) could not be routed to a destination list:\n\n' +
+    pend.slice(0, 15).join('\n') + (pend.length > 15 ? '\n...and ' + (pend.length - 15) + ' more.' : '') +
+    '\n\nThe usual cause is a missing "If Add Recomended Tier" on an Add row. See the History ' +
+    'Log "Routing Outcomes" entry for the exact per-row reason.\n\n' +
+    'Until they are routed, ' + stepName + ' cannot see those decisions and may put the same ' +
+    'companies back on Sort.\n\nRun ' + stepName + ' anyway?',
+    ui.ButtonSet.YES_NO) === ui.Button.YES;
+}
+
+/** Non-interactive variant for server-side entry points called from a modal dialog (where
+ *  SpreadsheetApp.getUi() alerts are not available). Routes what it can, logs the rest. */
+function autoRouteReviewsQuietly_(stepName) {
+  if (!unroutedReviewedRows_().length) return;
+  withDocLock_(function () {
+    return routeAllInternTabs_('Process Reviews', 'Auto pre-flight before ' + stepName);
+  });
+  var pend = unroutedReviewedRows_();
+  if (pend.length) {
+    logHistory_('Unrouted Reviews', stepName, pend.length + ' reviewed row(s) still unrouted when ' +
+      stepName + ' ran - they will not be visible to the crosscheck: ' +
+      pend.slice(0, 15).join(' | ') + (pend.length > 15 ? ' ...' : ''));
+  }
+}
+
+/* ===================== STEPS 5-6 - DISTRIBUTE, REVIEW & ROUTE ======================= */
 
 /** Move checked Sort rows to the chosen intern tab. Stamps Date Assigned + Due Date.
- *  Sort row: 0 Company | 1 Ticker | 2 RevAssign | 3 RevDate | 4 Analyst | 5 Analyst Note |
- *            6 Tier | 7 Sector | 8 Source | 9 Note | 10 Select | 11 Assign To           */
+ *  Sort row (0-based, matches TABS.sort.header):
+ *    0 Company | 1 Ticker | 2 Select | 3 Move To | 4 Assign To | 5 Review Assignement |
+ *    6 Ticker Reviewed Date | 7 Analyst | 8 Inclusion Rationale | 9 Tiering Rationale |
+ *    10 If Add Recomended Tier | 11 Recomended Sector | 12 Source | 13 Note              */
 function distributeSelected_impl_() {
   scaffoldAll_();
   var ss = SpreadsheetApp.getActive();
@@ -2126,7 +2389,7 @@ function cleanupActiveTab_impl_() {
   var skipped = routeSheetRows_(sh, counts);
   reorganizeInternTab_(sh);
   scaffoldInternSheets_();
-  restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.adds.name]);
+  restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name, TABS.adds.name]);
   forceMoveCheckboxes_(['Watchlist', 'FR Exclude', 'Confirmed Exclude']);
   var total = counts['Add'] + counts['Watchlist'] + counts['FR Exclude'] +
     counts['Confirmed Exclude'] + counts['In DB'];
@@ -2140,8 +2403,10 @@ function cleanupActiveTab_impl_() {
     (counts._errors ? ' ' + counts._errors + ' ERROR(S) - see History Log.' : ''));
 }
 
-/** Backstop: sweep ALL intern tabs and route eligible rows. */
-function processReviews_impl_() {
+/** Step 1: sweep ALL intern tabs and route every eligible row to its destination list.
+ *  Shared by the menu action and the pre-flight that runs ahead of Refresh / Import /
+ *  Crosscheck. Idempotent - already-routed rows are verified, not re-written. */
+function routeAllInternTabs_(action, source) {
   scaffoldAll_();
   var counts = { 'Add': 0, 'Watchlist': 0, 'FR Exclude': 0, 'Confirmed Exclude': 0, 'In DB': 0 };
   var skipped = 0;
@@ -2150,12 +2415,19 @@ function processReviews_impl_() {
     reorganizeInternTab_(sh);
   });
   scaffoldInternSheets_();
-  restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.adds.name]);
+  restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name, TABS.adds.name]);
   forceMoveCheckboxes_(['Watchlist', 'FR Exclude', 'Confirmed Exclude']);
-  logRoutingOutcomes_('Process Reviews', 'All intern tabs', counts, skipped,
+  logRoutingOutcomes_(action, source, counts, skipped,
     'Add ' + counts['Add'] + ', Watchlist ' + counts['Watchlist'] +
     ', FR Exclude ' + counts['FR Exclude'] + ', Confirmed Exclude ' + counts['Confirmed Exclude'] +
     ', In DB ' + counts['In DB']);
+  return { counts: counts, skipped: skipped };
+}
+
+/** Menu step 1 - Process Reviews (route all intern tabs). */
+function processReviews_impl_() {
+  var res = routeAllInternTabs_('Process Reviews', 'All intern tabs');
+  var counts = res.counts, skipped = res.skipped;
   toast_('Routed - Add: ' + counts['Add'] + ', Watchlist: ' + counts['Watchlist'] +
     ', FR Excl: ' + counts['FR Exclude'] + ', Conf Excl: ' + counts['Confirmed Exclude'] +
     ', In DB: ' + counts['In DB'] +
@@ -2310,31 +2582,39 @@ function routeSheetRows_(sh, counts) {
 /**
  * FINAL VALIDATION for rows whose Ticker Reviewed Date is already set: return the tab the
  * record was actually found on, or '' when it is missing from its destination (=> the stamp
- * is stale / hand-entered and the row must be re-routed). 'Add' rows are satisfied by the
- * Adds staging tab, Current DB (after the Kintone import lands) or the Watchlist hold row;
- * 'In DB' writes nothing by design, so a stamped In DB row is always satisfied.
- * Membership is matched like findExistingRow_ (ticker when present, else name) but read from
- * the per-run destKeys_ cache - verifying hundreds of audit rows costs one sheet read per
- * destination tab, not one per row.
+ * is stale / hand-entered and the row must be re-routed). Membership is matched like
+ * findExistingRow_ (ticker when present, else name) but read from the per-run destKeys_ cache
+ * - verifying hundreds of audit rows costs one sheet read per destination tab, not one per row.
+ *
+ * 'Add' is satisfied ONLY by the Adds staging tab or Current DB (i.e. the profile has since
+ * been imported into Kintone). It used to also accept the Watchlist, which is why Adds went
+ * missing: every Add writes a Watchlist hold row, and any pre-existing plain Watchlist row
+ * matched too, so a row whose reviewed date was already stamped (hand-entered, or stamped by
+ * a run that died before the Adds append) verified as "already routed" and the Adds row was
+ * never created. The hold row is a companion, not evidence.
+ * 'In DB' is satisfied by the In DB Reference list or Current DB.
  */
 function verifyRoutedDest_(ss, counts, assignment, nT, nN) {
-  function on(tabName, nCol, tCol) {
-    var set = destKeys_(ss, counts, tabName, nCol, tCol);
+  function on(tabName, nCol, tCol, altNameCol) {
+    var set = destKeys_(ss, counts, tabName, nCol, tCol, altNameCol);
     return (nT ? set.t[nT] : (nN && set.n[nN])) ? tabName : '';
   }
-  if (assignment === 'In DB') return 'Current DB (In DB writes no list row)';
+  if (assignment === 'In DB') {
+    return on(TABS.inDbRef.name, 1, 2) || on(TABS.currentDb.name, 1, 2);
+  }
   if (assignment === 'Watchlist') return on('Watchlist', 1, 2);
   if (assignment === 'FR Exclude' || assignment === 'Confirmed Exclude') return on(assignment, 1, 2);
   if (assignment === 'Add') {
-    return on(TABS.adds.name, 5, 7) || on(TABS.currentDb.name, 1, 2) || on('Watchlist', 1, 2);
+    return on(TABS.adds.name, 5, 7, 6) || on(TABS.currentDb.name, 1, 2);
   }
   return '';
 }
 
 /** Lazily read + cache a destination tab's membership as {t:{ticker:true}, n:{name:true}}
  *  on counts._destKeys. One getValues per tab per run, shared across all verified rows
- *  (and across every intern tab in a Process Reviews sweep). */
-function destKeys_(ss, counts, tabName, nCol, tCol) {
+ *  (and across every intern tab in a Process Reviews sweep). altNameCol is an optional second
+ *  name column (Adds carries both the AlphaSense name and the analyst's Primary Business Name). */
+function destKeys_(ss, counts, tabName, nCol, tCol, altNameCol) {
   var cache = counts._destKeys = counts._destKeys || {};
   if (cache[tabName]) return cache[tabName];
   var set = { t: {}, n: {} };
@@ -2342,12 +2622,16 @@ function destKeys_(ss, counts, tabName, nCol, tCol) {
   if (s) {
     var lr = s.getLastRow();
     if (lr >= 2) {
-      var maxC = Math.max(nCol, tCol);
+      var maxC = Math.max(nCol, tCol, altNameCol || 0);
       s.getRange(2, 1, lr - 1, maxC).getValues().forEach(function (r) {
         var t = normTicker_(r[tCol - 1]);
         if (t) set.t[t] = true;
         var nn = normName_(r[nCol - 1]);
         if (nn) set.n[nn] = true;
+        if (altNameCol) {
+          var an = normName_(r[altNameCol - 1]);
+          if (an) set.n[an] = true;
+        }
       });
     }
   }
@@ -2360,8 +2644,8 @@ function destKeys_(ss, counts, tabName, nCol, tCol) {
 function noteRoutedKeys_(counts, assignment, nT, nN) {
   var cache = counts._destKeys;
   if (!cache) return;
-  var tabs = assignment === 'Add' ? [TABS.adds.name, 'Watchlist']
-    : assignment === 'In DB' ? []
+  var tabs = assignment === 'Add' ? [TABS.adds.name, 'Watchlist']   // both are written
+    : assignment === 'In DB' ? [TABS.inDbRef.name]
     : [assignment];
   tabs.forEach(function (tn) {
     var set = cache[tn];
@@ -2467,11 +2751,17 @@ function routeRow_(internSh, rowNum, r, assignment) {
         TABS[assignment === 'FR Exclude' ? 'frExclude' : 'confirmedExclude'].header.length);
     }
   } else if (assignment === 'Add') {
+    // The Adds row is the deliverable; the Watchlist hold row is a COMPANION, never a
+    // substitute. They used to be coupled - the hold row was only written inside the "not a
+    // duplicate" branch, and verifyRoutedDest_ accepted a Watchlist row as proof that an Add
+    // had been routed. Together that produced the reported defect: the company appeared on
+    // Watchlist and never on Adds. The two writes are now independent, and a row is expected
+    // to exist on BOTH tabs at once.
     var addsSh = ss.getSheetByName(TABS.adds.name);
     if (!addsSh) throw new Error('destination tab "' + TABS.adds.name + '" not found');
     var wlAdd = ss.getSheetByName('Watchlist');
     if (!wlAdd) throw new Error('destination tab "Watchlist" not found (Add hold row)');
-    if (findExistingRow_(addsSh, 5, 7, nT, nN) > 0) {
+    if (findAddsRow_(addsSh, nT, nN) > 0) {
       status = 'dup';                               // already staged on Adds - no duplicate
     } else {
       // Adds row (17 cols): Imported?, Select, Analyst, New Record Flag, AS Business Name,
@@ -2485,22 +2775,78 @@ function routeRow_(internSh, rowNum, r, assignment) {
       addsSh.getRange(ar, 15).setFormula('=F' + ar);   // Folder Name mirrors Primary Business Name (col F)
       addsSh.getRange(ar, 1, 1, 2).insertCheckboxes(); // Imported? / Select = False
       formatRow_(addsSh, ar, TABS.adds.header.length);
-      // Hold on Watchlist until it appears Active in a DB refresh (then it graduates off).
-      if (findExistingRow_(wlAdd, 1, 2, nT, nN) <= 0) {
-        var pendNote = String(note || '').trim();
-        pendNote = pendNote ? pendNote + ' - Pending Kintone Add' : 'Pending Kintone Add';
-        wlAdd.appendRow([company, ticker, 'Add', today, analyst, inclusion, tier,
-          source, pendNote, tickerFlag_(ticker), '', sector, '']);
-        formatRow_(wlAdd, wlAdd.getLastRow(), TABS.watchlist.header.length);
-      }
     }
+    // Hold on the Watchlist until the profile appears Active in a DB refresh (then it
+    // graduates off). Ensured on EVERY Add route, including a dedup hit: a pre-existing plain
+    // Watchlist row is re-stamped as the Add hold row rather than left saying "Watchlist",
+    // which is what made an Add look like it had been filed to the wrong list.
+    ensureAddHoldRow_(wlAdd, company, ticker, today, analyst, inclusion, tier, source, note, sector);
   } else if (assignment === 'In DB') {
-    status = 'indb';   // already in Current DB - no list to append; row is struck through below
+    // 'In DB' used to write nothing anywhere. The reviewed pull row is normally a new ticker
+    // or spelling for a company Kintone already holds under a different one, and Current DB is
+    // rebuilt from the export on every refresh - so the decision left no trace and the same
+    // near-match came back onto Sort every cycle. Record the alias durably.
+    var idb = ss.getSheetByName(TABS.inDbRef.name);
+    if (!idb) throw new Error('destination tab "' + TABS.inDbRef.name + '" not found');
+    var idbRow = findExistingRow_(idb, 1, 2, nT, nN);
+    if (idbRow > 0) {
+      stampReviewOnDest_(idb, idbRow, assignment, today, analyst, inclusion, tier, source, note, sector, false);
+      status = 'updated';
+    } else {
+      idb.appendRow([company, ticker, assignment, today, analyst, inclusion,
+        tier, source, note, tickerFlag_(ticker)]);
+      formatRow_(idb, idb.getLastRow(), TABS.inDbRef.header.length);
+      status = 'indb';
+    }
   }
 
   internSh.getRange(rowNum, 4).setValue(today);
   internSh.getRange(rowNum, 1, 1, INTERN_WIDTH).setFontLine('line-through');
   return status;
+}
+
+/* Note text that marks a Watchlist row as the hold row for a profile staged on Adds. */
+var PENDING_ADD_NOTE = 'Pending Kintone Add';
+
+/**
+ * 1-based row of a company already staged on the Adds tab, or -1.
+ * Ticker (col G) when the row has one; otherwise EITHER name column - col E (AS Business
+ * Name) or col F (Primary Business Name), because the analyst may rename the profile and
+ * matching only col E would then stage the same ticker-less company twice.
+ */
+function findAddsRow_(sh, nT, nN) {
+  var lr = sh.getLastRow();
+  if (lr < 2) return -1;
+  var vals = sh.getRange(2, 1, lr - 1, 7).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var t = normTicker_(vals[i][6]);
+    if (nT) { if (t === nT) return i + 2; }
+    else if (nN && (normName_(vals[i][4]) === nN || normName_(vals[i][5]) === nN)) return i + 2;
+  }
+  return -1;
+}
+
+/**
+ * Ensure the Watchlist hold row for an Add. Appends it, or stamps an existing Watchlist row
+ * as the hold row (Review Assignement "Add" + the Pending Kintone Add note). Independent of
+ * whether the Adds row was appended or deduped this run, so the two tabs can never suppress
+ * one another. Returns 'added' or 'updated'.
+ */
+function ensureAddHoldRow_(wl, company, ticker, today, analyst, inclusion, tier, source, note, sector) {
+  var nT = normTicker_(ticker), nN = normName_(company);
+  var pendNote = String(note || '').trim();
+  if (pendNote.indexOf(PENDING_ADD_NOTE) < 0) {
+    pendNote = pendNote ? pendNote + ' - ' + PENDING_ADD_NOTE : PENDING_ADD_NOTE;
+  }
+  var row = findExistingRow_(wl, 1, 2, nT, nN);
+  if (row > 0) {
+    stampReviewOnDest_(wl, row, 'Add', today, analyst, inclusion, tier, source, pendNote, sector, true);
+    return 'updated';
+  }
+  wl.appendRow([company, ticker, 'Add', today, analyst, inclusion, tier,
+    source, pendNote, tickerFlag_(ticker), '', sector, '']);
+  formatRow_(wl, wl.getLastRow(), TABS.watchlist.header.length);
+  return 'added';
 }
 
 /**
@@ -2657,7 +3003,7 @@ function moveWriteDest_(dest, d, today) {
   return true;
 }
 
-/* =============== STEP 4 - KINTONE BULK-UPLOAD FORMATTER (SINGLE TAB) ================ */
+/* =============== STEPS 7-8 - KINTONE BULK-UPLOAD FORMATTER (SINGLE TAB) ============= */
 
 /**
  * Build the single "Kintone Upload" tab from qualified Adds. Column order matches the
@@ -2899,7 +3245,10 @@ function clearAdds_impl_() {
   if (lr < 2) { toast_('Adds is already empty.'); return; }
   var n = lr - 1, ui = SpreadsheetApp.getUi();
   var resp = ui.alert('Clear Adds?',
-    'Delete all ' + n + ' row(s) from the Adds tab? Do this only after importing them to Kintone.',
+    'Delete all ' + n + ' row(s) from the Adds tab? Do this only after importing them to Kintone.\n\n' +
+    'Their "Pending Kintone Add" hold rows stay on the Watchlist and graduate off at the next ' +
+    'Refresh DB References, once the profiles are Active in the DB. Clearing Adds BEFORE the ' +
+    'import means the next Process Reviews will re-stage those profiles here.',
     ui.ButtonSet.YES_NO);
   if (resp !== ui.Button.YES) return;
   var f = sh.getFilter();
