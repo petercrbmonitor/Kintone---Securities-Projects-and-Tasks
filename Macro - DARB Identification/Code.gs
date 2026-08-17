@@ -2413,6 +2413,8 @@ function cleanupActiveTab_impl_() {
     (counts._recovered ? ' ' + counts._recovered + ' recovered from a prior incomplete run.' : '') +
     (counts._updated ? ' ' + counts._updated + ' updated existing.' : '') +
     (counts._dups ? ' ' + counts._dups + ' already staged (deduped).' : '') +
+    (counts._addsRetired ? ' ' + counts._addsRetired + ' stale Adds staging row(s) retired.' : '') +
+    (counts._addsImported ? ' ' + counts._addsImported + ' already-imported Adds row(s) need retiring in Kintone.' : '') +
     (counts._verified ? ' ' + counts._verified + ' already routed (verified).' : '') +
     (skipped ? ' ' + skipped + ' skipped - see History Log for per-row reasons.' : '') +
     (counts._errors ? ' ' + counts._errors + ' ERROR(S) - see History Log.' : ''));
@@ -2448,6 +2450,8 @@ function processReviews_impl_() {
     ', In DB: ' + counts['In DB'] +
     (counts._recovered ? '. ' + counts._recovered + ' recovered' : '') +
     (counts._dups ? '. ' + counts._dups + ' deduped' : '') +
+    (counts._addsRetired ? '. ' + counts._addsRetired + ' stale Adds row(s) retired' : '') +
+    (counts._addsImported ? '. ' + counts._addsImported + ' imported Adds row(s) need retiring in Kintone' : '') +
     (skipped ? '. Skipped ' + skipped + ' row(s) - see History Log.' : '.') +
     (counts._errors ? ' ' + counts._errors + ' ERROR(S) - see History Log.' : ''));
 }
@@ -2468,6 +2472,9 @@ function logRoutingOutcomes_(action, source, counts, skipped, summaryPrefix) {
     (counts._updated ? ' (' + counts._updated + ' stamped onto existing list rows)' : '') +
     (counts._verified ? ' - ' + counts._verified + ' already routed (verified on destination)' : '') +
     (counts._dups ? ' - ' + counts._dups + ' already staged (deduped)' : '') +
+    (counts._superseded ? ' - ' + counts._superseded + ' superseded an earlier Add' : '') +
+    (counts._addsRetired ? ' - ' + counts._addsRetired + ' stale Adds staging row(s) retired' : '') +
+    (counts._addsImported ? ' - ' + counts._addsImported + ' already-imported Adds row(s) left in place (retire in Kintone)' : '') +
     (skipped ? ' - ' + skipped + ' skipped (per-row reasons in Routing Outcomes)' : '') +
     (counts._errors ? ' - ' + counts._errors + ' ERROR(S)' : '');
   logHistory_(action, source, summary);
@@ -2532,6 +2539,28 @@ function routeSheetRows_(sh, counts) {
       // Verify the destination actually holds the record; re-route it when it does not.
       var seenOn = verifyRoutedDest_(ss, counts, assignment, nT, nN);
       if (seenOn) {
+        // Change of heart on an already-routed row: the destination is correct, but the company
+        // is ALSO still staged on Adds from the earlier "Add" this row used to carry.
+        // Verification only ever checked presence, never that the OTHER destinations were still
+        // valid, so that orphan sat on Adds and shipped to Kintone on the next build. Re-route,
+        // which re-stamps the destination and retires the staging row - but only when this row
+        // holds the newest decision, so an old audit row can never retire a newer Add.
+        if (assignment !== 'Add' && stagedOnAdds_(ss, counts, nT, nN) &&
+            isNewestDecision_(internDecisions_(counts), tab, i + 2, nT, nN)) {
+          try {
+            routeRow_(sh, i + 2, r, assignment, counts);
+            noteRoutedKeys_(counts, assignment, nT, nN);
+            counts[assignment]++;
+            counts._superseded = (counts._superseded || 0) + 1;
+            log.push('ROUTED ' + who + ' -> ' + assignment + ' (SUPERSEDES the earlier "Add" on ' +
+              'this row - destination re-stamped, Adds staging row retired).');
+          } catch (errS) {
+            counts._errors = (counts._errors || 0) + 1;
+            skipped++;
+            log.push('ERROR ' + who + ' - superseding the earlier Add failed: ' + errS.message);
+          }
+          return;
+        }
         counts._verified = (counts._verified || 0) + 1;
         log.push('OK ' + who + ' - already routed (' + assignment + '; verified on ' + seenOn + ').');
         return;
@@ -2544,7 +2573,7 @@ function routeSheetRows_(sh, counts) {
         return;
       }
       try {
-        var st2 = routeRow_(sh, i + 2, r, assignment);
+        var st2 = routeRow_(sh, i + 2, r, assignment, counts);
         noteRoutedKeys_(counts, assignment, nT, nN);
         counts._recovered = (counts._recovered || 0) + 1;
         if (st2 === 'dup') counts._dups = (counts._dups || 0) + 1;
@@ -2566,7 +2595,7 @@ function routeSheetRows_(sh, counts) {
       return;
     }
     try {
-      var status = routeRow_(sh, i + 2, r, assignment); // 'added' | 'updated' | 'dup' | 'indb'
+      var status = routeRow_(sh, i + 2, r, assignment, counts); // 'added'|'updated'|'dup'|'indb'
       noteRoutedKeys_(counts, assignment, nT, nN);
       if (status === 'dup') {
         counts._dups = (counts._dups || 0) + 1;         // already staged elsewhere
@@ -2730,7 +2759,7 @@ function requiredReason_(assignment, r) {
  *   11 Pure-Play | 12 Website URLs | 13 Source Documents | 14 Source | 15 Note |
  *   16 Date Assigned | 17 Due Date
  */
-function routeRow_(internSh, rowNum, r, assignment) {
+function routeRow_(internSh, rowNum, r, assignment, counts) {
   var ss = SpreadsheetApp.getActive();
   var today = new Date();
   var company = r[0], ticker = r[1];
@@ -2819,6 +2848,10 @@ function routeRow_(internSh, rowNum, r, assignment) {
     }
   }
 
+  // This decision is being written now, so it is by definition the newest one for the company:
+  // any staging row still sitting on Adds from an earlier "Add" is stale and must not ship.
+  if (assignment !== 'Add') retireStaleAddsRow_(ss, assignment, company, ticker, nT, nN, counts);
+
   internSh.getRange(rowNum, 4).setValue(today);
   internSh.getRange(rowNum, 1, 1, INTERN_WIDTH).setFontLine('line-through');
   return status;
@@ -2826,6 +2859,105 @@ function routeRow_(internSh, rowNum, r, assignment) {
 
 /* Note text that marks a Watchlist row as the hold row for a profile staged on Adds. */
 var PENDING_ADD_NOTE = 'Pending Kintone Add';
+
+/**
+ * Newest reviewed decision per company across ALL analyst tabs:
+ *   't:'<ticker> / 'n:'<name>  ->  { assignment, time, tab, row }
+ * Only rows carrying BOTH a Review Assignement and a Ticker Reviewed Date count - those are
+ * the decisions that have actually been acted on.
+ *
+ * This is what makes retiring a stale Adds staging row safe to automate. Two situations look
+ * identical on the sheet and must not be treated the same:
+ *   - the analyst downgraded their OWN earlier Add (row now says Watchlist) -> retire the
+ *     staging row, it would otherwise ship to Kintone;
+ *   - an OLD "Watchlist" row from a previous cycle sits in the audit block while a LATER Add
+ *     staged the same company -> leave the staging row alone; that old row must never kill a
+ *     newer decision.
+ * Only the row holding the newest decision is allowed to retire a staging row.
+ */
+function latestInternDecisions_() {
+  var map = {};
+  getInternSheets_().forEach(function (sh) {
+    var lr = sh.getLastRow();
+    if (lr < 2) return;
+    var tab = sh.getName();
+    sh.getRange(2, 1, lr - 1, 4).getValues().forEach(function (r, i) {
+      var company = String(r[0] || '').trim();
+      if (company === COMPLETED_MARKER) return;
+      var assignment = String(r[2] || '').trim();
+      if (!assignment || !r[3]) return;                    // undecided, or not yet routed
+      var t = (r[3] instanceof Date) ? r[3].getTime() : Date.parse(String(r[3]));
+      if (isNaN(t)) return;
+      var entry = { assignment: assignment, time: t, tab: tab, row: i + 2 };
+      var nT = normTicker_(r[1]), nN = normName_(company);
+      [nT ? 't:' + nT : '', nN ? 'n:' + nN : ''].forEach(function (k) {
+        if (k && (map[k] === undefined || t > map[k].time)) map[k] = entry;  // ties: first wins
+      });
+    });
+  });
+  return map;
+}
+
+/** The decision map, computed once per routing run and cached on counts. */
+function internDecisions_(counts) {
+  if (!counts) return latestInternDecisions_();
+  if (!counts._decisions) counts._decisions = latestInternDecisions_();
+  return counts._decisions;
+}
+
+/** The newest decision on record for this company, or null. */
+function decisionFor_(map, nT, nN) {
+  return (nT && map['t:' + nT]) || (nN && map['n:' + nN]) || null;
+}
+
+/** True when (tab, rowNum) is the row holding that newest decision. */
+function isNewestDecision_(map, tab, rowNum, nT, nN) {
+  var e = decisionFor_(map, nT, nN);
+  return !!e && e.tab === tab && e.row === rowNum;
+}
+
+/** True when the company is currently staged on the Adds tab (cached membership read). */
+function stagedOnAdds_(ss, counts, nT, nN) {
+  var set = destKeys_(ss, counts, TABS.adds.name, 5, 7, 6);
+  return nT ? !!set.t[nT] : (nN ? !!set.n[nN] : false);
+}
+
+/**
+ * A later decision supersedes an earlier "Add": when a company is routed or moved to a
+ * non-Add destination, a staging row left on Adds would still be exported on the next Build
+ * Kintone Upload - creating in Kintone the very profile the reviewer just decided against.
+ * Retire that staging row, UNLESS "Imported?" is ticked: the profile is already in Kintone,
+ * so deleting the staging row would only hide a record that has to be retired in Kintone
+ * itself. Returns 'retired', 'imported' (warned, left in place) or '' (nothing staged).
+ * Callers must have established that this decision is the newest one for the company.
+ */
+function retireStaleAddsRow_(ss, assignment, company, ticker, nT, nN, counts) {
+  var addsSh = ss.getSheetByName(TABS.adds.name);
+  if (!addsSh) return '';
+  var row = findAddsRow_(addsSh, nT, nN);
+  if (row <= 0) return '';
+  var label = (String(company || '').trim() || '(no name)') + (ticker ? ' [' + ticker + ']' : '');
+  var log = counts ? (counts._log = counts._log || []) : null;
+  if (addsSh.getRange(row, 1).getValue() === true) {          // Imported? already ticked
+    if (counts) counts._addsImported = (counts._addsImported || 0) + 1;
+    if (log) {
+      log.push('WARNING ' + label + ' -> ' + assignment + ' but its Adds staging row is ticked ' +
+        'Imported? - the profile is already in Kintone. Left in place; retire it in Kintone.');
+    }
+    return 'imported';
+  }
+  addsSh.deleteRow(row);
+  if (counts) {
+    counts._addsRetired = (counts._addsRetired || 0) + 1;
+    var cache = counts._destKeys && counts._destKeys[TABS.adds.name];   // keep the run consistent
+    if (cache) { if (nT) delete cache.t[nT]; if (nN) delete cache.n[nN]; }
+  }
+  if (log) {
+    log.push('RETIRED Adds staging row for ' + label + ' - ' + assignment +
+      ' supersedes the earlier Add (not imported yet, so it will not reach Kintone).');
+  }
+  return 'retired';
+}
 
 /**
  * 1-based row of a company already staged on the Adds tab, or -1.
@@ -2927,6 +3059,7 @@ function moveSelected_impl_() {
   var today = new Date();
   var moved = { 'Sort': 0, 'Watchlist': 0, 'FR Exclude': 0, 'Confirmed Exclude': 0, 'Remove': 0 };
   var skipped = 0, dups = 0, toDelete = [], touchedDest = {};
+  var addsStats = { _log: [] };   // stale Adds staging rows retired by these moves
 
   vals.forEach(function (r, i) {
     if (r[cfg.selectCol - 1] !== true) return;              // Select checkbox
@@ -2947,7 +3080,7 @@ function moveSelected_impl_() {
         tier: cfg.tier !== undefined ? r[cfg.tier] : '',
         sector: cfg.sector !== undefined ? r[cfg.sector] : '',
         analyst: cfg.analyst !== undefined ? r[cfg.analyst] : ''
-      }, today);
+      }, today, addsStats);
       if (!ap) dups++;                                       // already on destination
       touchedDest[dest] = true;
     }
@@ -2971,21 +3104,31 @@ function moveSelected_impl_() {
 
   var total = moved['Sort'] + moved['Watchlist'] + moved['FR Exclude'] +
     moved['Confirmed Exclude'] + moved['Remove'];
+  if (addsStats._addsRetired) restyleTabs_([TABS.adds.name]);   // rows were deleted from Adds
   logHistory_('Move Selected', name, total + ' moved - Sort ' + moved['Sort'] +
     ', Watchlist ' + moved['Watchlist'] + ', FR Exclude ' + moved['FR Exclude'] +
     ', Confirmed Exclude ' + moved['Confirmed Exclude'] + ', Removed ' + moved['Remove'] +
     (dups ? ' - ' + dups + ' already on destination (deduped)' : '') +
-    (skipped ? ' - ' + skipped + ' skipped (no valid Move To, or Move To = this list)' : ''));
+    (skipped ? ' - ' + skipped + ' skipped (no valid Move To, or Move To = this list)' : '') +
+    (addsStats._addsRetired ? ' - ' + addsStats._addsRetired + ' stale Adds staging row(s) retired' : '') +
+    (addsStats._addsImported ? ' - ' + addsStats._addsImported + ' already-imported Adds row(s) left in place' : '') +
+    (addsStats._log.length ? '\n' + addsStats._log.join('\n').slice(0, 3000) : ''));
   toast_('Moved ' + total + ' row(s) from "' + name + '".' +
     (dups ? ' ' + dups + ' already on destination (deduped).' : '') +
+    (addsStats._addsRetired ? ' ' + addsStats._addsRetired + ' stale Adds staging row(s) retired.' : '') +
+    (addsStats._addsImported ? ' ' + addsStats._addsImported + ' already-imported Adds row(s) need retiring in Kintone.' : '') +
     (skipped ? ' ' + skipped + ' skipped - set a Move To that is not this list.' : ''));
 }
 
 /** Write one reclassified row to its destination list. Returns true if appended, false if
  *  the company was already on that list (duplicate skip). */
-function moveWriteDest_(dest, d, today) {
+function moveWriteDest_(dest, d, today, stats) {
   var ss = SpreadsheetApp.getActive();
   var nT = normTicker_(d.ticker), nN = normName_(d.company);
+  // Filing a company onto a list is a decision made right now, so it supersedes any earlier
+  // Add still staged on the Adds tab. (Moving BACK to Sort is not a decision - it reopens the
+  // row for triage - so it leaves the staging row alone.)
+  if (dest !== 'Sort') retireStaleAddsRow_(ss, dest, d.company, d.ticker, nT, nN, stats);
   if (dest === 'Sort') {
     var sortSh = ss.getSheetByName(TABS.sort.name);
     if (findExistingRow_(sortSh, 1, 2, nT, nN) > 0) return false;
@@ -3063,6 +3206,12 @@ function buildKintoneUpload() {
 
   // Build-time validation: a blank ticker breaks the Source Docs key-match. Warn - with the
   // offending names - first. (Action Status is auto-filled, so it is never blank in the output.)
+  // Also the last line of defence against a CONTRADICTED staging row: if the newest analyst
+  // decision on record for the company is not "Add", exporting this row would create in
+  // Kintone the profile that was rejected. Process Reviews retires the ones it can prove;
+  // this catches anything it could not (rows staged before this check existed, or edited
+  // straight on the Adds tab). Flagged, never auto-deleted at build time - the operator decides.
+  var decisions = latestInternDecisions_();
   var problems = [];
   vals.forEach(function (r) {
     var imported = r[0] === true, sel = r[1] === true;
@@ -3072,14 +3221,23 @@ function buildKintoneUpload() {
     if (!anySel && inDb_(r)) return;                 // already in DB - will be skipped
     var issues = [];
     if (!String(r[6] || '').trim()) issues.push('blank ticker');
-    if (issues.length) problems.push(nm + ' (' + issues.join(', ') + ')');
+    var dec = decisionFor_(decisions, normTicker_(r[6]), normName_(r[5])) ||
+              decisionFor_(decisions, '', normName_(r[4]));
+    if (dec && dec.assignment !== 'Add') {
+      issues.push('latest analyst decision is "' + dec.assignment + '" on the ' + dec.tab +
+        ' tab, not Add');
+    }
+    if (issues.length) problems.push(nm + ' (' + issues.join('; ') + ')');
   });
   if (problems.length) {
     var ui = SpreadsheetApp.getUi();
     var resp = ui.alert('Kintone Upload - check these rows',
       problems.length + ' qualifying Add row(s) have issues that affect the Kintone import:\n\n' +
       problems.slice(0, 20).join('\n') + (problems.length > 20 ? '\n...' : '') +
-      '\n\nBlank ticker breaks the Source Documents key-match.\n\nBuild anyway?',
+      '\n\nBlank ticker breaks the Source Documents key-match.\n' +
+      'A decision that is not "Add" means the reviewer changed their mind after this row was ' +
+      'staged - building will create that profile in Kintone anyway. Delete the row here first, ' +
+      'or run Process Reviews.\n\nBuild anyway?',
       ui.ButtonSet.YES_NO);
     if (resp !== ui.Button.YES) { toast_('Kintone build cancelled - fix the flagged rows.'); return; }
   }

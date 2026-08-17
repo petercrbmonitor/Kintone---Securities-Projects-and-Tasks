@@ -41,6 +41,21 @@ An `Add` produces **two** rows, by design, and neither suppresses the other:
 If a company shows up on the Watchlist but is missing from Adds, run **Process Reviews**: it
 re-stages any Add whose staging row went missing.
 
+### Changing your mind after routing
+If you go back to a routed (struck-through) row and change `Review Assignement` from `Add` to
+anything else — or file the company onto a list with **Move To** — the next **Process Reviews**
+retires the leftover **Adds** staging row, so the profile you rejected is not created in
+Kintone. It is named in the History Log. Two deliberate exceptions:
+
+- if `Imported?` is already ticked the row is **kept** and you are warned instead — the profile
+  exists in Kintone, so it has to be retired there, not hidden here;
+- an older decision never retires a newer one. If a company was filed `Watchlist` last year and
+  re-reviewed as an `Add` this week, the old row leaves the new staging row alone.
+
+**Build Kintone Upload** is the backstop: it refuses to build quietly if a staged row's latest
+analyst decision is not `Add`, naming the row and the conflicting decision so you can delete it
+first. That is what catches rows staged before this behaviour existed.
+
 ## What "In DB" writes
 `In DB` records the company on the **In DB Reference** tab. Current DB is rebuilt from the
 Kintone export every refresh, so without that record the decision left no trace and the same
