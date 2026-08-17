@@ -632,7 +632,10 @@ var TAB_HELP = {
     '- Source "Review"   = near-match to something already tracked; read the Note, confirm new vs same.\n' +
     '- Source "DB Drift" = name/ticker changed vs the DB; update the DB or move it to a list.\n' +
     'Process a row: tick Select, then EITHER set Assign To + run Distribute (hand to an analyst),\n' +
-    'OR set Move To + run "Move selected rows between lists" (file it directly - no analyst).',
+    'OR set Move To + run "Move selected rows between lists" (file it directly - no analyst).\n' +
+    'Rows stay here until you distribute or move them: Run Crosscheck CARRIES the queue forward\n' +
+    '(Select ticks and Assign To kept) and only appends genuinely new names. To start from an\n' +
+    'empty queue use Utilities > Clear Sort queue.',
   'Adds': 'STAGING for Kintone adds - one row per qualified profile (auto-created when an analyst\n' +
     'routes a Sort row to "Add"). Fill in Website URLs / Source Documents, then run Build Kintone\n' +
     'Upload. Imported? auto-ticks once the profile shows up in Current DB.\n' +
@@ -1813,30 +1816,39 @@ function importLegacyWatchlist(file) {
  *                         already-reviewed company whose ticker changed (new listing, added
  *                         exchange suffix, AlphaSense re-symbol) came back as a brand-new
  *                         name every week.
+ *   drift        true  -> a ticker match with a different name raises a "DB Drift" row asking
+ *                         for the record to be corrected. Only meaningful for lists that
+ *                         mirror a Kintone record; Adds and In DB Reference are local staging
+ *                         notes, so a name difference there is not drift to report.
  * Adds is a reference list: a profile staged for Kintone is not in the export yet, so nothing
  * else in the crosscheck knows about it until the following refresh. */
 var CROSSCHECK_REFS = [
-  { name: 'Current DB', width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
+  { name: TABS.currentDb.name, width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
     reviewedCol: -1, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: 11,
-    reviewable: false, nearMatch: true, nameExclude: false },
-  { name: 'Watchlist', width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
+    reviewable: false, nearMatch: true, nameExclude: false, drift: true },
+  { name: TABS.watchlist.name, width: 13, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: 12,
     reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: 11,
-    reviewable: true, nearMatch: false, nameExclude: true },
-  { name: 'FR Exclude', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true, drift: true },
+  { name: TABS.frExclude.name, width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
     reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
-    reviewable: true, nearMatch: false, nameExclude: true },
-  { name: 'Confirmed Exclude', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true, drift: true },
+  { name: TABS.confirmedExclude.name, width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
     reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
-    reviewable: true, nearMatch: false, nameExclude: true },
-  { name: 'In DB Reference', width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
+    reviewable: true, nearMatch: false, nameExclude: true, drift: true },
+  { name: TABS.inDbRef.name, width: 10, nameCol: 0, altNameCol: -1, tickerCol: 1, isinCol: -1,
     reviewedCol: 3, tierCol: 6, analystCol: 4, noteCol: 8, sectorCol: -1,
-    reviewable: true, nearMatch: false, nameExclude: true },
+    reviewable: true, nearMatch: false, nameExclude: true, drift: false },
   /* Adds: 4 AS Business Name | 5 Primary Business Name | 6 AlphaSense Ticker | 8 CRBM Tier |
      10 Sector | 2 Analyst. Not reviewable - a staged profile is pending import, not stale. */
-  { name: 'Adds', width: 17, nameCol: 4, altNameCol: 5, tickerCol: 6, isinCol: -1,
+  { name: TABS.adds.name, width: 17, nameCol: 4, altNameCol: 5, tickerCol: 6, isinCol: -1,
     reviewedCol: -1, tierCol: 8, analystCol: 2, noteCol: -1, sectorCol: 10,
-    reviewable: false, nearMatch: false, nameExclude: true }
+    reviewable: false, nearMatch: false, nameExclude: true, drift: false }
 ];
+
+/* A normalized name shorter than this is not used for name-based exclusion - the same
+ * conservatism as the fuzzy first-word rule. Keeps a stray one-word entry on a staging tab
+ * from silently excluding unrelated companies (their ticker still matches normally). */
+var NAME_EXCLUDE_MIN = 4;
 
 /** Read a declared reference column from a row ('' when the list has no such column). */
 function refCell_(r, i) { return (i >= 0 && i < r.length) ? r[i] : ''; }
@@ -1910,6 +1922,7 @@ function runCrosscheck() {
         tier: refCell_(r, def.tierCol), analyst: refCell_(r, def.analystCol),
         note: refCell_(r, def.noteCol), sector: refCell_(r, def.sectorCol)
       };
+      entry.drift = def.drift === true;
       if (t) {
         if (tickerMap[t] === undefined) tickerMap[t] = entry;
         var root = tickerRoot_(t);
@@ -1926,7 +1939,7 @@ function runCrosscheck() {
       if (def.nameExclude) {
         [n, alt].forEach(function (x) {
           var nn = normName_(x);
-          if (nn && nameExclMap[nn] === undefined) nameExclMap[nn] = entry;
+          if (nn.length >= NAME_EXCLUDE_MIN && nameExclMap[nn] === undefined) nameExclMap[nn] = entry;
         });
       }
       if (def.nearMatch && n) addName_(n, def.name, t);
@@ -1957,8 +1970,8 @@ function runCrosscheck() {
       if (r[3]) return;                     // already routed - its destination list covers it
       var t = normTicker_(r[1]);
       if (t) inFlight['t:' + t] = sh.getName();
-      var nn = normName_(n);
-      if (nn) inFlight['n:' + nn] = sh.getName();
+      var nn = normName_(n);                  // same short-name guard as the exclude lists
+      if (nn.length >= NAME_EXCLUDE_MIN) inFlight['n:' + nn] = sh.getName();
     });
   });
 
@@ -1988,12 +2001,15 @@ function runCrosscheck() {
   var sortRows = [], exclRows = [], considered = 0, drift = 0, nearMatch = 0, flagged = 0;
   var resurrected = 0, held = 0, alreadyQueued = 0;
 
-  /** Queue a Sort row unless the company is already queued (carried or added this run). */
+  /** Queue a Sort row unless the company is already queued (carried, or added earlier in this
+   *  run). Returns true when the row was queued - callers only count what actually landed, so
+   *  the History Log / toast numbers always reconcile with the rows on the tab. */
   function pushSort_(nt, nn, row) {
-    if ((nt && onSort['t:' + nt]) || (!nt && nn && onSort['n:' + nn])) { alreadyQueued++; return; }
+    if ((nt && onSort['t:' + nt]) || (!nt && nn && onSort['n:' + nn])) { alreadyQueued++; return false; }
     if (nt) onSort['t:' + nt] = true;
     if (nn) onSort['n:' + nn] = true;
     sortRows.push(row);
+    return true;
   }
 
   input.forEach(function (r) {
@@ -2024,28 +2040,25 @@ function runCrosscheck() {
         //    stale -> back to Sort. The reference row STAYS put: deleting it (as the previous
         //    build did) threw away the review history, so the next crosscheck saw a new name.
         //    Routing the re-reviewed row stamps the existing reference row in place.
-        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', ex.tier || '',
-          ex.sector || '', ex.source, rnote]);
-        resurrected++;
+        if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', ex.tier || '',
+            ex.sector || '', ex.source, rnote])) resurrected++;
         return;
       }
       exclRows.push([company, ticker, ex.source, 'Ticker']);
       var en = normName_(ex.name);
-      if (nn && en && nn !== en && !fuzzyPair_(nn, en)) {    //    name drifted -> also surface on Sort
-        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
-          'Name changed - same ticker as "' + ex.name + '" on ' + ex.source +
-          '. Update the DB name, or move to a list.']);
-        drift++;
+      if (ex.drift && nn && en && nn !== en && !fuzzyPair_(nn, en)) { //  name drifted -> also on Sort
+        if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
+            'Name changed - same ticker as "' + ex.name + '" on ' + ex.source +
+            '. Update the DB name, or move to a list.'])) drift++;
       }
       return;
     }
     if (isin && isinMap[isin] !== undefined) {               // b. same ISIN, new ticker
       var im = isinMap[isin];
       exclRows.push([company, ticker, im.source, 'ISIN']);
-      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
-        'Ticker changed - same ISIN as ' + im.ticker + ' "' + im.name + '" on ' + im.source +
-        '. Update the DB ticker, or move to a list.']);
-      drift++;
+      if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'DB Drift',
+          'Ticker changed - same ISIN as ' + im.ticker + ' "' + im.name + '" on ' + im.source +
+          '. Update the DB ticker, or move to a list.'])) drift++;
       return;
     }
     if (nn && nameExclMap[nn] !== undefined) {               // c. exact name on a reviewed list
@@ -2053,11 +2066,12 @@ function runCrosscheck() {
       if (xm.reviewable && isStale_(xm.reviewed, thresholdDays, resurfaceBlank)) {
         var xstr = (xm.reviewed instanceof Date)
           ? Utilities.formatDate(xm.reviewed, tz, 'yyyy-MM-dd') : 'no date';
-        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', xm.tier || '',
-          xm.sector || '', xm.source,
-          'Re-review: name matches "' + xm.name + '" on ' + xm.source + ', last reviewed ' +
-          xstr + ' (> ' + thresholdDays + 'd). Ticker differs - confirm same security.']);
-        resurrected++;
+        if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', xm.tier || '',
+            xm.sector || '', xm.source,
+            'Re-review: name matches "' + xm.name + '" on ' + xm.source + ', last reviewed ' +
+            xstr + ' (> ' + thresholdDays + 'd). Ticker differs - confirm same security.'])) {
+          resurrected++;
+        }
         return;
       }
       //    Already reviewed under this name; only the ticker string differs (new listing,
@@ -2068,30 +2082,29 @@ function runCrosscheck() {
     }
     if (nn && nameMap[nn] !== undefined) {                   // d. exact name vs Current DB
       var nm = nameMap[nn];
-      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
-        'Near-match (exact name) vs "' + nm.orig + '" on ' + nm.source +
-        (nm.ticker ? ' (' + nm.ticker + ')' : '') + ' - confirm new vs same.']);
-      nearMatch++;
+      if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+          'Near-match (exact name) vs "' + nm.orig + '" on ' + nm.source +
+          (nm.ticker ? ' (' + nm.ticker + ')' : '') + ' - confirm new vs same.'])) nearMatch++;
       return;
     }
     var fw = nn ? nn.split(' ')[0] : '';
     if (fw.length >= 4 && firstWordIdx[fw]) {                // e. fuzzy name -> Sort (near-match)
       var m = fuzzyConfirm_(nn, firstWordIdx[fw]);
       if (m) {
-        pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
-          'Near-match (fuzzy name) vs "' + m.orig + '" on ' + m.source +
-          (m.ticker ? ' (' + m.ticker + ')' : '') + ' - confirm new vs same.']);
-        nearMatch++;
+        if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+            'Near-match (fuzzy name) vs "' + m.orig + '" on ' + m.source +
+            (m.ticker ? ' (' + m.ticker + ')' : '') + ' - confirm new vs same.'])) nearMatch++;
         return;
       }
     }
     var root = tickerRoot_(nt);                              // f. ticker root -> Sort (near-match)
     if (root.length >= 3 && rootMap[root] !== undefined && rootMap[root].ticker !== nt) {
       var rm = rootMap[root];
-      pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
-        'Near-match (ticker root) vs "' + rm.name + '" on ' + rm.source +
-        (rm.ticker ? ' (' + rm.ticker + ')' : '') + ' - possible listing/ticker change.']);
-      nearMatch++;
+      if (pushSort_(nt, nn, [company, ticker, '', '', '', '', '', '', '', '', '', '', 'Review',
+          'Near-match (ticker root) vs "' + rm.name + '" on ' + rm.source +
+          (rm.ticker ? ' (' + rm.ticker + ')' : '') + ' - possible listing/ticker change.'])) {
+        nearMatch++;
+      }
       return;
     }
     // g. definitely new (from the AlphaSense pull)
@@ -2225,7 +2238,9 @@ function unroutedReviewedRows_() {
   getInternSheets_().forEach(function (sh) {
     var lr = sh.getLastRow();
     if (lr < 2) return;
-    sh.getRange(2, 1, lr - 1, INTERN_WIDTH).getValues().forEach(function (r, i) {
+    // Only the first four columns are needed (Company | Ticker | Review Assignement |
+    // Ticker Reviewed Date) - this runs before any scaffold, so never assume the full width.
+    sh.getRange(2, 1, lr - 1, 4).getValues().forEach(function (r, i) {
       var c = String(r[0] || '').trim();
       if (c === COMPLETED_MARKER) return;
       if (!c && !String(r[1] || '').trim()) return;
@@ -2555,14 +2570,15 @@ function routeSheetRows_(sh, counts) {
       noteRoutedKeys_(counts, assignment, nT, nN);
       if (status === 'dup') {
         counts._dups = (counts._dups || 0) + 1;         // already staged elsewhere
-        log.push('ROUTED ' + who + ' -> ' + assignment + ' (already staged on Adds - deduped, marked routed).');
+        log.push('ROUTED ' + who + ' -> ' + assignment +
+          ' (already staged on Adds - deduped; the Watchlist hold row was still ensured).');
       } else {
         counts[assignment]++;                           // added / updated / in-DB all count as routed
         if (status === 'updated') {
           counts._updated = (counts._updated || 0) + 1;
           log.push('ROUTED ' + who + ' -> ' + assignment + ' (stamped onto the existing destination row).');
         } else if (status === 'indb') {
-          log.push('ROUTED ' + who + ' - In DB (already in Current DB; nothing appended).');
+          log.push('ROUTED ' + who + ' - In DB (alias recorded on ' + TABS.inDbRef.name + ').');
         } else {
           log.push('ROUTED ' + who + ' -> ' + assignment + '.');
         }
@@ -2700,11 +2716,14 @@ function requiredReason_(assignment, r) {
  * Route one reviewed intern row to its destination. Routed rows are NOT deleted -
  * Ticker Reviewed Date is stamped and the row is struck through for audit.
  * When the company (by ticker, or name if ticker blank) is already on a reference list
- * (Watchlist / FR Exclude / Confirmed Exclude), the review is STAMPED onto that existing
- * row rather than dropped - otherwise the routed row vanishes and the pre-existing row keeps
- * a blank Ticker Reviewed Date, so Crosscheck re-surfaces the ticker for review every cycle.
- * Returns a status string: 'added' (new dest row), 'updated' (stamped an existing dest row),
- * 'dup' (already staged on Adds - skipped) or 'indb' (In DB - nothing to write).
+ * (Watchlist / FR Exclude / Confirmed Exclude / In DB Reference), the review is STAMPED onto
+ * that existing row rather than dropped - otherwise the routed row vanishes and the
+ * pre-existing row keeps a blank Ticker Reviewed Date, so Crosscheck re-surfaces the ticker
+ * for review every cycle.
+ * Every assignment now writes somewhere: Add -> Adds staging row + Watchlist hold row,
+ * In DB -> In DB Reference. Returns a status string: 'added' (new dest row), 'updated'
+ * (stamped an existing dest row), 'dup' (already staged on Adds - the Watchlist hold row is
+ * still ensured) or 'indb' (new In DB Reference row).
  * Intern row (18 cols):
  *   0 Company | 1 Ticker | 2 RevAssign | 3 RevDate | 4 Analyst | 5 Primary Business Name |
  *   6 Description | 7 Inclusion Rationale | 8 Tiering Rationale | 9 Tier | 10 Sector |
