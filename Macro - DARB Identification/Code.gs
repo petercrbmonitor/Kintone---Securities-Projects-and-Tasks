@@ -204,11 +204,11 @@ var TAB_ROLE = {
   'Confirmed Exclude': 'reference', 'No Ticker Reference': 'reference',
   'In DB Reference': 'reference',
   'Adds': 'output', 'Kintone Upload': 'output',
-  'History Log': 'audit',
+  'History Log': 'audit', 'Health Check': 'audit',
   'Dashboard': 'guide'
 };
 /* Audit tabs the Utilities menu can hide (Config kept visible - it holds an editable setting). */
-var AUDIT_TAB_NAMES = ['History Log'];
+var AUDIT_TAB_NAMES = ['History Log', 'Health Check'];
 /* Tabs retired by the redesign - auto-deleted on scaffold (drift now lives on Sort; the two
  * Kintone tabs are replaced by the single Kintone Upload tab; In DB Log / Stats audit tabs
  * removed). */
@@ -355,6 +355,8 @@ function onOpen() {
       .addItem('Rescaffold / Restyle Tabs', 'rescaffold')
       .addItem('Start New Cycle (reset step checkmarks)', 'startNewCycle')
       .addItem('Clear Sort queue (discard untriaged rows)', 'clearSortQueue')
+      .addSeparator()
+      .addItem('Pipeline Health Check', 'runHealthCheck')
       .addSeparator()
       .addItem('Re-apply Tier/Sector rules (active tab)', 'reapplyTierRules')
       .addItem('Check Tier/Sector rules (active tab)', 'checkTierRules')
@@ -642,6 +644,10 @@ var TAB_HELP = {
     'Every Add also gets a companion "Pending Kintone Add" hold row on the Watchlist - that is by\n' +
     'design and does NOT replace this row. If a profile is on the Watchlist but missing here, run\n' +
     'Process Reviews: it re-stages any Add whose staging row went missing.',
+  'Health Check': 'REPORT - rebuilt by Utilities > Pipeline Health Check. Read-only: it changes\n' +
+    'nothing anywhere else. ERROR rows are schema drift (a column inserted mid-schema makes every\n' +
+    'read one column out) - fix those first. WARN rows are contradictions between tabs: reviewed\n' +
+    'rows that never routed, staged Adds a later decision overruled, a company on two lists.',
   'In DB Reference': 'REFERENCE - companies an analyst reviewed and marked "In DB" (already in\n' +
     'Kintone, usually under a different ticker or spelling). Current DB is rebuilt from the export\n' +
     'every refresh, so this list is what keeps those aliases from re-surfacing on Sort each week.\n' +
@@ -1168,6 +1174,7 @@ function headerLenByName_(name) {
   for (var i = 0; i < keys.length; i++) {
     if (TABS[keys[i]].name === name) return TABS[keys[i]].header.length;
   }
+  if (name === HEALTH_TAB.name) return HEALTH_TAB.header.length;
   return ANALYST_BY_FIRST.hasOwnProperty(name) ? INTERN_WIDTH : null;
 }
 
@@ -1241,7 +1248,19 @@ function normName_(name) {
   return w.join(' ');
 }
 
-function normTicker_(t) { return String(t || '').trim().toUpperCase(); }
+/**
+ * Canonical COMPARISON form for a ticker. Uppercase, and every separator style folded to a
+ * single "." so the same security matches however the source wrote it: 9923:HK / 9923 HK /
+ * 9923.HK, BRK/B / BRK.B. Without this the same listing written two ways missed in tickerMap
+ * and in every dedup guard, and came back onto Sort as a brand-new name.
+ * Comparison only - the tabs always keep the ticker exactly as it arrived.
+ */
+function normTicker_(t) {
+  return String(t || '').trim().toUpperCase()
+    .replace(/[\s:\/]+/g, '.')   // whitespace, colon and slash all mean "suffix separator"
+    .replace(/\.{2,}/g, '.')      // collapse repeats
+    .replace(/^\.+|\.+$/g, '');  // never lead or trail with a separator
+}
 
 /**
  * 1-based row of the first data row on `sh` whose ticker (1-based col tCol) matches normT,
@@ -2231,7 +2250,9 @@ function moveSelected()       { return withDocLock_(moveSelected_impl_); }
  * Rows an analyst has decided on (Review Assignement set) that have NOT reached their
  * destination list yet (no Ticker Reviewed Date). These are exactly the rows that make the
  * crosscheck treat an already-reviewed company as new, so every step that reads the
- * reference data checks for them first. Returns one description per row.
+ * reference data checks for them first.
+ * Returns [{ tab, row, company, ticker, assignment, label }] - `label` is the one-line
+ * operator-facing form used in the warning dialogs and the History Log.
  */
 function unroutedReviewedRows_() {
   var out = [];
@@ -2246,8 +2267,13 @@ function unroutedReviewedRows_() {
       if (!c && !String(r[1] || '').trim()) return;
       if (!String(r[2] || '').trim()) return;   // not reviewed yet - nothing to route
       if (r[3]) return;                         // routed (date stamped)
-      out.push(sh.getName() + '!' + (i + 2) + '  ' + (c || '(no name)') +
-        (r[1] ? ' [' + r[1] + ']' : '') + ' -> ' + String(r[2]).trim());
+      var ticker = String(r[1] || '').trim();
+      var assignment = String(r[2]).trim();
+      out.push({
+        tab: sh.getName(), row: i + 2, company: c, ticker: ticker, assignment: assignment,
+        label: sh.getName() + '!' + (i + 2) + '  ' + (c || '(no name)') +
+          (ticker ? ' [' + ticker + ']' : '') + ' -> ' + assignment
+      });
     });
   });
   return out;
@@ -2270,12 +2296,17 @@ function preflightRouteReviews_(stepName) {
   var ui = SpreadsheetApp.getUi();
   return ui.alert('Reviewed rows are still unrouted',
     pend.length + ' reviewed row(s) could not be routed to a destination list:\n\n' +
-    pend.slice(0, 15).join('\n') + (pend.length > 15 ? '\n...and ' + (pend.length - 15) + ' more.' : '') +
+    healthLabels_(pend, 15, '\n') + (pend.length > 15 ? '\n...and ' + (pend.length - 15) + ' more.' : '') +
     '\n\nThe usual cause is a missing "If Add Recomended Tier" on an Add row. See the History ' +
     'Log "Routing Outcomes" entry for the exact per-row reason.\n\n' +
     'Until they are routed, ' + stepName + ' cannot see those decisions and may put the same ' +
     'companies back on Sort.\n\nRun ' + stepName + ' anyway?',
     ui.ButtonSet.YES_NO) === ui.Button.YES;
+}
+
+/** First `max` rows of an unroutedReviewedRows_ list as one joined string of labels. */
+function healthLabels_(list, max, sep) {
+  return list.slice(0, max).map(function (p) { return p.label; }).join(sep);
 }
 
 /** Non-interactive variant for server-side entry points called from a modal dialog (where
@@ -2289,7 +2320,7 @@ function autoRouteReviewsQuietly_(stepName) {
   if (pend.length) {
     logHistory_('Unrouted Reviews', stepName, pend.length + ' reviewed row(s) still unrouted when ' +
       stepName + ' ran - they will not be visible to the crosscheck: ' +
-      pend.slice(0, 15).join(' | ') + (pend.length > 15 ? ' ...' : ''));
+      healthLabels_(pend, 15, ' | ') + (pend.length > 15 ? ' ...' : ''));
   }
 }
 
@@ -3381,6 +3412,290 @@ function downloadKintoneUploadCsv() {
     Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + '.csv',
     'Kintone Upload CSV');
   markStep_('8. Download Kintone Upload CSV', 'CSV downloaded');
+}
+
+/* ============================ PIPELINE HEALTH CHECK ================================= */
+
+/* Read-only self-audit, written to an on-demand "Health Check" tab. Two families:
+ *
+ *   SCHEMA - every tab's header row against the schema this script writes, each analyst tab
+ *            against INTERN_HEADER, and the Select / Move To positions on the movable tabs.
+ *            A column inserted mid-schema is the failure mode that has bitten this workbook
+ *            before: rows sit silently misaligned under the new headers and every read is
+ *            one column out. Nothing surfaces it until something writes to the wrong place,
+ *            so it is asserted explicitly here.
+ *   STATE  - contradictions between tabs: reviewed rows that never reached a list, staging
+ *            rows a later decision has overruled, Add hold rows with nothing staged, a
+ *            company filed on two lists at once, duplicate tickers within one list.
+ *
+ * Nothing is repaired, written or deleted anywhere else: the report names the row and the
+ * fix. It deliberately does NOT scaffold first - scaffolding repairs headers and realigns
+ * analyst rows, which would silently erase the very drift this is meant to find. */
+var HEALTH_TAB = { name: 'Health Check', header: ['Severity', 'Check', 'Tab', 'Company',
+  'Ticker', 'Detail', 'Suggested action'] };
+var HEALTH_RANK = { ERROR: 0, WARN: 1, INFO: 2, OK: 3 };
+var RESCAFFOLD_FIX = 'Utilities > Rescaffold / Restyle Tabs.';
+
+/** Menu: run every check and rebuild the Health Check tab. */
+function runHealthCheck() {
+  var ss = SpreadsheetApp.getActive();
+  var out = [];
+  function add(sev, check, tab, company, ticker, detail, action) {
+    out.push([sev, check, tab || '', company || '', ticker || '', detail || '', action || '']);
+  }
+  var cache = {};                      // shared destKeys_ membership cache for this run
+  healthCheckSchema_(ss, add);
+  healthCheckState_(ss, cache, add);
+  healthCheckSettings_(ss, add);
+
+  var errors = out.filter(function (r) { return r[0] === 'ERROR'; }).length;
+  var warns = out.filter(function (r) { return r[0] === 'WARN'; }).length;
+  out.sort(function (a, b) {
+    return (HEALTH_RANK[a[0]] - HEALTH_RANK[b[0]]) || String(a[1]).localeCompare(String(b[1]));
+  });
+  if (!out.length) {
+    add('OK', 'All checks passed', '', '', '',
+      'No schema drift and no routing contradictions found.', 'Nothing to do.');
+  }
+
+  var sh = ensureTab_(HEALTH_TAB);
+  clearBody_(sh);
+  sh.getRange(2, 1, out.length, HEALTH_TAB.header.length).setValues(out);
+  applyFormat_(sh, HEALTH_TAB.header.length);
+  sh.setTabColor(TAB_COLOR.audit);
+  try { ss.setActiveSheet(sh); } catch (e) { /* limited auth */ }
+
+  var summary = errors + ' error(s), ' + warns + ' warning(s), ' +
+    (out.length - errors - warns) + ' info';
+  logHistory_('Health Check', 'Workbook', summary);
+  toast_('Health Check: ' + summary + '. See the Health Check tab.');
+}
+
+/** Column letter for a 1-based index (27 -> AA). */
+function colLetter_(n) {
+  var s = '';
+  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
+  return s;
+}
+
+/** Per-column differences between a sheet's header row and the schema it should carry. */
+function headerDiff_(sh, header) {
+  var out = [];
+  if (sh.getMaxColumns() < header.length) {
+    out.push('Sheet has only ' + sh.getMaxColumns() + ' columns; the schema needs ' + header.length + '.');
+    return out;
+  }
+  var cur = sh.getRange(1, 1, 1, header.length).getValues()[0];
+  header.forEach(function (h, i) {
+    if (String(cur[i] || '').trim() !== h) {
+      out.push('Column ' + colLetter_(i + 1) + ' should read "' + h + '" but reads "' +
+        String(cur[i] || '') + '".');
+    }
+  });
+  return out;
+}
+
+/** SCHEMA checks - headers, analyst-tab layout, and the Select / Move To column positions. */
+function healthCheckSchema_(ss, add) {
+  Object.keys(TABS).forEach(function (k) {
+    var def = TABS[k];
+    var sh = ss.getSheetByName(def.name);
+    if (!sh) {
+      add('ERROR', 'Schema', def.name, '', '', 'Tab is missing.', RESCAFFOLD_FIX);
+      return;
+    }
+    headerDiff_(sh, def.header).forEach(function (d) {
+      add('ERROR', 'Schema', def.name, '', '', d,
+        'Check the tab for rows sitting one column out FIRST, then ' + RESCAFFOLD_FIX);
+    });
+  });
+  getInternSheets_().forEach(function (sh) {
+    headerDiff_(sh, INTERN_HEADER).forEach(function (d) {
+      add('ERROR', 'Schema', sh.getName(), '', '', d,
+        RESCAFFOLD_FIX + ' It realigns analyst rows to the ' + INTERN_WIDTH + '-column layout.');
+    });
+  });
+  Object.keys(MOVABLE).forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return;
+    var cfg = MOVABLE[name];
+    var need = Math.max(cfg.selectCol, cfg.moveCol);
+    if (sh.getMaxColumns() < need) {
+      add('ERROR', 'Schema', name, '', '', 'Tab is narrower than its Select / Move To columns.',
+        RESCAFFOLD_FIX);
+      return;
+    }
+    var hdr = sh.getRange(1, 1, 1, need).getValues()[0];
+    [[cfg.selectCol, 'Select'], [cfg.moveCol, 'Move To']].forEach(function (pair) {
+      if (String(hdr[pair[0] - 1] || '').trim() !== pair[1]) {
+        add('ERROR', 'Schema', name, '', '',
+          'MOVABLE expects "' + pair[1] + '" in column ' + colLetter_(pair[0]) + ' but it reads "' +
+          String(hdr[pair[0] - 1] || '') + '" - ticks and Move To choices would be read from the ' +
+          'wrong column.',
+          'A column was inserted mid-schema. Fix the tab layout, then ' + RESCAFFOLD_FIX);
+      }
+    });
+  });
+}
+
+/** STATE checks - contradictions between the tabs. */
+function healthCheckState_(ss, cache, add) {
+  function on(tabName, nT, nN, nCol, tCol, altCol) {
+    var set = destKeys_(ss, cache, tabName, nCol || 1, tCol || 2, altCol);
+    return nT ? !!set.t[nT] : (nN ? !!set.n[nN] : false);
+  }
+
+  // 1. Decisions that never reached a destination list.
+  unroutedReviewedRows_().forEach(function (p) {
+    add('WARN', 'Unrouted review', p.tab, p.company, p.ticker,
+      'Reviewed as "' + p.assignment + '" on row ' + p.row + ' but never routed.',
+      'Run step 1 (Process Reviews). If it persists the row is missing a required field - ' +
+      'the History Log "Routing Outcomes" entry gives the exact reason.');
+  });
+
+  // 2. Rows marked routed whose destination does not actually hold them.
+  getInternSheets_().forEach(function (sh) {
+    var lr = sh.getLastRow();
+    if (lr < 2) return;
+    var w = Math.min(INTERN_WIDTH, sh.getMaxColumns());
+    if (w < 4) return;                                  // schema check already reported it
+    var tab = sh.getName();
+    sh.getRange(2, 1, lr - 1, w).getValues().forEach(function (r, i) {
+      var company = String(r[0] || '').trim();
+      if (company === COMPLETED_MARKER) return;
+      var ticker = String(r[1] || '').trim();
+      if (!company && !ticker) return;
+      var a = String(r[2] || '').trim();
+      if (!a) return;
+      if (ASSIGN_OPTIONS.indexOf(a) < 0) {
+        add('WARN', 'Invalid assignment', tab, company, ticker,
+          'Review Assignement reads "' + a + '" on row ' + (i + 2) + '.',
+          'Set it to one of: ' + ASSIGN_OPTIONS.join(' / ') + ', then run Process Reviews.');
+        return;
+      }
+      if (!r[3]) return;                                // pending - covered by check 1
+      if (!verifyRoutedDest_(ss, cache, a, normTicker_(ticker), normName_(company))) {
+        add('WARN', 'Routed but missing', tab, company, ticker,
+          'Row ' + (i + 2) + ' is stamped reviewed ("' + a + '") but the record is not on its ' +
+          'destination list.',
+          'Run Process Reviews - it re-routes rows whose destination is missing.');
+      }
+    });
+  });
+
+  // 3. Staging rows on Adds: overruled by a later decision, or with no hold row keeping the
+  //    ticker out of next week's pull.
+  var adds = ss.getSheetByName(TABS.adds.name);
+  var decisions = latestInternDecisions_();
+  if (adds && adds.getLastRow() >= 2 && adds.getMaxColumns() >= TABS.adds.header.length) {
+    adds.getRange(2, 1, adds.getLastRow() - 1, TABS.adds.header.length).getValues()
+      .forEach(function (r, i) {
+        var company = String(r[5] || '').trim() || String(r[4] || '').trim();
+        var ticker = String(r[6] || '').trim();
+        if (!company && !ticker) return;
+        var nT = normTicker_(ticker), nN = normName_(company);
+        var dec = decisionFor_(decisions, nT, nN) ||
+                  decisionFor_(decisions, '', normName_(String(r[4] || '')));
+        if (dec && dec.assignment !== 'Add') {
+          add('ERROR', 'Contradicted Add', TABS.adds.name, company, ticker,
+            'Row ' + (i + 2) + ' is staged for Kintone, but the latest analyst decision is "' +
+            dec.assignment + '" on ' + dec.tab + '!' + dec.row + '.',
+            'Delete this row (Build Kintone Upload warns before exporting it), or re-review ' +
+            'the company if the Add was right.');
+        }
+        if (!ticker) {
+          add('WARN', 'Blank ticker', TABS.adds.name, company, '',
+            'Row ' + (i + 2) + ' has no AlphaSense Ticker.',
+            'A blank ticker breaks the Source Documents key-match in the Kintone import.');
+        }
+        if (r[0] !== true && !on('Watchlist', nT, nN) && !on(TABS.currentDb.name, nT, nN)) {
+          add('WARN', 'Missing hold row', TABS.adds.name, company, ticker,
+            'Staged for Kintone with no "Pending Kintone Add" hold row on the Watchlist and ' +
+            'not yet in Current DB.',
+            'Run Process Reviews - the ticker can otherwise come back on the next pull as new.');
+        }
+      });
+  }
+
+  // 4. Hold rows with nothing staged behind them - they will never reach Kintone.
+  var wl = ss.getSheetByName('Watchlist');
+  if (wl && wl.getLastRow() >= 2 && wl.getMaxColumns() >= 13) {
+    wl.getRange(2, 1, wl.getLastRow() - 1, 13).getValues().forEach(function (r, i) {
+      var isHold = String(r[2] || '').trim() === 'Add' ||
+                   String(r[8] || '').indexOf(PENDING_ADD_NOTE) >= 0;
+      if (!isHold) return;
+      var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+      var nT = normTicker_(ticker), nN = normName_(company);
+      if (stagedOnAdds_(ss, cache, nT, nN)) return;              // the pair is intact
+      if (on(TABS.currentDb.name, nT, nN)) return;               // imported - graduates off next refresh
+      add('WARN', 'Hold row without staging row', 'Watchlist', company, ticker,
+        'Row ' + (i + 2) + ' is marked as a pending Add, but nothing is staged on Adds and it ' +
+        'is not in Current DB.',
+        'It will never upload. Re-review the company, or clear the Add marking on this row.');
+    });
+  }
+
+  // 5. A company on two reference lists at once, or listed twice on one.
+  var lists = ['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name];
+  var seen = {};
+  lists.forEach(function (tn) {
+    var sh = ss.getSheetByName(tn);
+    if (!sh || sh.getLastRow() < 2) return;
+    var perTab = {};
+    sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r, i) {
+      var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+      if (!company && !ticker) return;
+      var nT = normTicker_(ticker), nN = normName_(company);
+      var key = nT || ('n:' + nN);
+      if (!key) return;
+      if (perTab[key]) {
+        add('WARN', 'Duplicate row', tn, company, ticker,
+          'Rows ' + perTab[key] + ' and ' + (i + 2) + ' are the same company.',
+          'Delete one - the first match wins in the crosscheck, so the second row and its ' +
+          'review date are ignored.');
+        return;
+      }
+      perTab[key] = i + 2;
+      var e = seen[key] || (seen[key] = { company: company, ticker: ticker, tabs: [] });
+      e.tabs.push(tn);
+    });
+  });
+  Object.keys(seen).forEach(function (k) {
+    var e = seen[k];
+    if (e.tabs.length > 1) {
+      add('WARN', 'On two lists', e.tabs.join(' + '), e.company, e.ticker,
+        'Filed on ' + e.tabs.join(' and ') + ' at the same time - contradictory decisions.',
+        'Keep the correct one and remove the other (' + e.tabs[0] + ' wins in the crosscheck, ' +
+        'because reference lists load in that order).');
+    }
+  });
+}
+
+/** SETTINGS checks - the Dashboard values the crosscheck depends on. */
+function healthCheckSettings_(ss, add) {
+  var dash = dashboardSheet_();
+  if (!dash) {
+    add('ERROR', 'Settings', DASHBOARD_NAME, '', '', 'The Dashboard tab is missing.', RESCAFFOLD_FIX);
+    return;
+  }
+  if (!dashboardStepsCurrent_(dash)) {
+    add('INFO', 'Settings', DASHBOARD_NAME, '', '',
+      'The step status table does not match the current pipeline steps.',
+      RESCAFFOLD_FIX + ' Settings values are preserved.');
+  }
+  var raw = configValue_('re-review tickers older', '');
+  var n = parseInt(raw, 10);
+  if (String(raw).trim() === '' || isNaN(n) || n <= 0) {
+    add('WARN', 'Settings', DASHBOARD_NAME, '', '',
+      '"Re-review tickers older than (days)" reads "' + raw + '", so the 365-day default is ' +
+      'being used.', 'Put a positive whole number in the Value column.');
+  }
+  var rb = String(configValue_('resurface tickers with no reviewed', 'No')).trim().toLowerCase();
+  if (['yes', 'no', 'true', 'false', 'y', 'n'].indexOf(rb) < 0) {
+    add('WARN', 'Settings', DASHBOARD_NAME, '', '',
+      '"Resurface tickers with no reviewed date" reads "' + rb + '", which is read as No.',
+      'Use Yes or No.');
+  }
 }
 
 /* ================================ SHARED UTILITIES ================================== */

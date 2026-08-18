@@ -66,8 +66,10 @@ every cycle.
 Sort has both an **Assign To** column and a **Move To** column. For a row that doesn't need
 analyst research (e.g. an obvious non-DARB name), tick `Select`, set **Move To**
 (`Watchlist` / `FR Exclude` / `Confirmed Exclude` / `Remove`), and run **Move selected rows
-between lists** — it files the row directly. `Send all Review to Sort` bulk-moves the Review
-tab onto Sort for triage.
+between lists** — it files the row directly. The same Select + Move To pair works on
+**Excluded**, **Watchlist**, **FR Exclude** and **Confirmed Exclude** to reclassify a row,
+including back to **Sort** for re-triage. (There is no separate Review tab: near-matches land
+on Sort tagged `Review` in the Source column.)
 
 ## Analyst capture formats (review tabs)
 Hover the column headers for a reminder. One entry per line:
@@ -103,6 +105,15 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
 - **Clear Sort queue** - discard untriaged Sort rows. Crosscheck now *carries the Sort queue
   forward* (with your `Select` ticks and `Assign To` choices) instead of wiping it, so this is
   the deliberate way to start from a clean queue.
+- **Pipeline Health Check** - read-only audit of the whole workbook, written to a **Health
+  Check** tab. Run it when something looks wrong, and after any script update. It changes
+  nothing: it reports and tells you the fix.
+  - **ERROR = schema drift.** A column inserted mid-schema makes every read one column out -
+    the failure mode that has bitten this workbook before. Fix these first.
+  - **WARN = contradictions between tabs**: reviewed rows that never routed, a staged Add a
+    later decision overruled, a `Pending Kintone Add` hold row with nothing staged behind it, a
+    company filed on two lists at once, the same company listed twice on one list, or a
+    Settings value that cannot be read (so a default is silently in use).
 - **Hide audit + log tabs** / **Show all tabs**.
 
 ## Tabs at a glance
@@ -111,9 +122,12 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
   No Ticker Reference (hidden).
 - **Output:** Adds, Kintone Upload.
 - **Guide:** Dashboard (status table + Settings + workflow guide).
-- **Audit:** History Log.
+- **Audit:** History Log, Health Check (created the first time you run the health check).
 
 ## Notes
+- **Tickers match across separator styles.** `9923:HK`, `9923 HK` and `9923.HK` are treated as
+  the same security everywhere tickers are compared, as are `BRK/B` and `BRK.B`. Tabs still show
+  the ticker exactly as the source wrote it.
 - **Nothing already in the pipeline is re-issued as new.** Crosscheck holds back companies that
   are out with an analyst but not yet routed (reported on **Excluded** as `In flight`), keeps
   rows already on Sort, and treats **Adds** and **In DB Reference** as reference lists. An
