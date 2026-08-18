@@ -4,7 +4,7 @@ name: Deploy Apps Script
 #   push to `main`        -> STAGING / test script   (secret: SCRIPT_ID_STAGING)
 #   push to `production`  -> PRODUCTION live script   (secret: SCRIPT_ID)
 # Plus manual runs from the Actions tab ("Run workflow") - the target is chosen
-# by the branch you run it from. A `node --check` gate runs before any push.
+# by the branch you run it from. A syntax check AND the test suite gate every push.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   CLASPRC_JSON       full contents of ~/.clasprc.json after `clasp login`
@@ -42,10 +42,10 @@ jobs:
         run: npm install -g @google/clasp@2.4.2
 
       - name: Syntax check (gate before deploy)
-        run: |
-          cp "Macro - DARB Identification/Code.gs" /tmp/Code_check.js
-          node --check /tmp/Code_check.js
-          echo "Syntax OK"
+        run: npm run check
+
+      - name: Test suite (gate before deploy)
+        run: npm test
 
       - name: Deploy to the branch's environment
         env:
