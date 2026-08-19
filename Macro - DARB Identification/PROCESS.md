@@ -56,6 +56,18 @@ Kintone. It is named in the History Log. Two deliberate exceptions:
 analyst decision is not `Add`, naming the row and the conflicting decision so you can delete it
 first. That is what catches rows staged before this behaviour existed.
 
+## One company, one list
+The reference lists are mutually exclusive: **Watchlist**, **FR Exclude**, **Confirmed
+Exclude** and **In DB Reference** each hold a company's *current* filing. Routing a review, or
+filing a row with **Move To**, now removes the company from the other lists automatically -
+the older decision is superseded, and the removal is named in the History Log. (An `Add` is
+the one exception: it keeps its `Pending Kintone Add` hold row on the Watchlist until the
+profile is imported.)
+
+Before this, a new decision was written without clearing the old one, so companies could sit
+on two lists with contradictory decisions - and the crosscheck answers from whichever list it
+reads first, which might be the superseded one.
+
 ## What "In DB" writes
 `In DB` records the company on the **In DB Reference** tab. Current DB is rebuilt from the
 Kintone export every refresh, so without that record the decision left no trace and the same
@@ -116,13 +128,20 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
     reference rows carry that value), a
     company filed on two lists at once, the same company listed twice on one list, or a
     Settings value that cannot be read (so a default is silently in use).
-- **Merge duplicate rows on reference lists** - fixes the Health Check's `Duplicate row`
-  findings in bulk across Watchlist / FR Exclude / Confirmed Exclude / In DB Reference. For
-  each company the row with the most recent `Ticker Reviewed Date` is kept and any field it is
-  missing is filled in from the duplicate, so no reviewed date, analyst, tier or note is lost
-  whichever copy carried it. Shows the counts and asks before deleting anything, and names
-  every removed row in the History Log. Safe to re-run. **Current DB is not included** - it is
-  rebuilt from the Kintone export each refresh, so a duplicate there has to be fixed in Kintone.
+- **Repair reference lists** - fixes three Health Check findings in bulk across Watchlist /
+  FR Exclude / Confirmed Exclude / In DB Reference. Shows the counts and asks before changing
+  anything; every change is named in the History Log; safe to re-run.
+  - `Duplicate row` (same company twice on one list) - the row with the most recent
+    `Ticker Reviewed Date` is kept and any field it is missing is filled in from the other
+    copy, so no reviewed date, analyst, tier or note is lost whichever copy carried it.
+  - `On two lists` (contradictory filings) - the most recent decision wins and the older
+    filing is removed, again merging anything only the removed row held.
+  - `Hold row without staging row` (a pending Add that will never upload) - re-staged on
+    **Adds** when the hold row carries a tier; otherwise the Add marking is cleared and it
+    stays an ordinary Watchlist row.
+
+  **Current DB is not included** - it is rebuilt from the Kintone export each refresh, so a
+  duplicate there has to be fixed in Kintone.
 - **Hide audit + log tabs** / **Show all tabs**.
 
 ## Tabs at a glance

@@ -357,7 +357,7 @@ function onOpen() {
       .addItem('Clear Sort queue (discard untriaged rows)', 'clearSortQueue')
       .addSeparator()
       .addItem('Pipeline Health Check', 'runHealthCheck')
-      .addItem('Merge duplicate rows on reference lists', 'dedupeReferenceLists')
+      .addItem('Repair reference lists (duplicates / two lists / pending Adds)', 'repairReferenceLists')
       .addSeparator()
       .addItem('Re-apply Tier/Sector rules (active tab)', 'reapplyTierRules')
       .addItem('Check Tier/Sector rules (active tab)', 'checkTierRules')
@@ -2434,6 +2434,7 @@ function cleanupActiveTab_impl_() {
   var sh = ss.getSheetByName(name);
   var counts = { 'Add': 0, 'Watchlist': 0, 'FR Exclude': 0, 'Confirmed Exclude': 0, 'In DB': 0 };
   var skipped = routeSheetRows_(sh, counts);
+  applyCrossListRemovals_(ss, counts);
   reorganizeInternTab_(sh);
   scaffoldInternSheets_();
   restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name, TABS.adds.name]);
@@ -2463,6 +2464,7 @@ function routeAllInternTabs_(action, source) {
     skipped += routeSheetRows_(sh, counts);
     reorganizeInternTab_(sh);
   });
+  applyCrossListRemovals_(SpreadsheetApp.getActive(), counts);   // one pass, after all routing
   scaffoldInternSheets_();
   restyleTabs_(['Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name, TABS.adds.name]);
   forceMoveCheckboxes_(['Watchlist', 'FR Exclude', 'Confirmed Exclude']);
@@ -2506,6 +2508,7 @@ function logRoutingOutcomes_(action, source, counts, skipped, summaryPrefix) {
     (counts._dups ? ' - ' + counts._dups + ' already staged (deduped)' : '') +
     (counts._superseded ? ' - ' + counts._superseded + ' superseded an earlier Add' : '') +
     (counts._addsRetired ? ' - ' + counts._addsRetired + ' stale Adds staging row(s) retired' : '') +
+    (counts._crossRemoved ? ' - ' + counts._crossRemoved + ' older filing(s) removed from other lists' : '') +
     (counts._addsImported ? ' - ' + counts._addsImported + ' already-imported Adds row(s) left in place (retire in Kintone)' : '') +
     (skipped ? ' - ' + skipped + ' skipped (per-row reasons in Routing Outcomes)' : '') +
     (counts._errors ? ' - ' + counts._errors + ' ERROR(S)' : '');
@@ -2883,6 +2886,10 @@ function routeRow_(internSh, rowNum, r, assignment, counts) {
   // This decision is being written now, so it is by definition the newest one for the company:
   // any staging row still sitting on Adds from an earlier "Add" is stale and must not ship.
   if (assignment !== 'Add') retireStaleAddsRow_(ss, assignment, company, ticker, nT, nN, counts);
+  // ...and the company's rows on the OTHER reference lists are stale too. Writing the new
+  // decision without clearing the old filing is what left companies on two lists at once,
+  // with the crosscheck answering from whichever it happened to read first.
+  noteCrossListFiling_(counts, refTabForAssignment_(assignment), company, ticker, nT, nN);
 
   internSh.getRange(rowNum, 4).setValue(today);
   internSh.getRange(rowNum, 1, 1, INTERN_WIDTH).setFontLine('line-through');
@@ -3136,6 +3143,7 @@ function moveSelected_impl_() {
 
   var total = moved['Sort'] + moved['Watchlist'] + moved['FR Exclude'] +
     moved['Confirmed Exclude'] + moved['Remove'];
+  applyCrossListRemovals_(ss, addsStats);                      // drop the older filings
   if (addsStats._addsRetired) restyleTabs_([TABS.adds.name]);   // rows were deleted from Adds
   logHistory_('Move Selected', name, total + ' moved - Sort ' + moved['Sort'] +
     ', Watchlist ' + moved['Watchlist'] + ', FR Exclude ' + moved['FR Exclude'] +
@@ -3143,6 +3151,7 @@ function moveSelected_impl_() {
     (dups ? ' - ' + dups + ' already on destination (deduped)' : '') +
     (skipped ? ' - ' + skipped + ' skipped (no valid Move To, or Move To = this list)' : '') +
     (addsStats._addsRetired ? ' - ' + addsStats._addsRetired + ' stale Adds staging row(s) retired' : '') +
+    (addsStats._crossRemoved ? ' - ' + addsStats._crossRemoved + ' older filing(s) removed from other lists' : '') +
     (addsStats._addsImported ? ' - ' + addsStats._addsImported + ' already-imported Adds row(s) left in place' : '') +
     (addsStats._log.length ? '\n' + addsStats._log.join('\n').slice(0, 3000) : ''));
   toast_('Moved ' + total + ' row(s) from "' + name + '".' +
@@ -3160,7 +3169,10 @@ function moveWriteDest_(dest, d, today, stats) {
   // Filing a company onto a list is a decision made right now, so it supersedes any earlier
   // Add still staged on the Adds tab. (Moving BACK to Sort is not a decision - it reopens the
   // row for triage - so it leaves the staging row alone.)
-  if (dest !== 'Sort') retireStaleAddsRow_(ss, dest, d.company, d.ticker, nT, nN, stats);
+  if (dest !== 'Sort') {
+    retireStaleAddsRow_(ss, dest, d.company, d.ticker, nT, nN, stats);
+    noteCrossListFiling_(stats, dest, d.company, d.ticker, nT, nN);   // one filing, not several
+  }
   if (dest === 'Sort') {
     var sortSh = ss.getSheetByName(TABS.sort.name);
     if (findExistingRow_(sortSh, 1, 2, nT, nN) > 0) return false;
@@ -3430,6 +3442,90 @@ function downloadKintoneUploadCsv() {
  *
  * Current DB is NOT included: it is rebuilt from the Kintone export on every refresh, so a
  * duplicate there has to be fixed in Kintone or it comes straight back. */
+/* Every reference list a company can be filed on. These are MUTUALLY EXCLUSIVE: a company has
+ * one current filing, not several. The Watchlist doubles as the holding area for a profile
+ * staged on Adds ("Pending Kintone Add"), which is why an Add keeps its Watchlist row. */
+var REF_LIST_TABS = ['Watchlist', 'FR Exclude', 'Confirmed Exclude', 'In DB Reference'];
+
+/** The reference list an assignment files a company on. */
+function refTabForAssignment_(assignment) {
+  if (assignment === 'In DB') return TABS.inDbRef.name;
+  if (assignment === 'Add') return 'Watchlist';        // the hold row
+  return assignment;                                    // Watchlist / FR Exclude / Confirmed Exclude
+}
+
+/**
+ * Record that a company has just been filed on `keepTab`, so its rows on the OTHER reference
+ * lists can be removed once the run finishes. Routing used to write the new decision and
+ * leave the old one in place, which is how companies ended up filed on two lists at once -
+ * and the crosscheck reads whichever it meets first, so the losing row could be the one
+ * answering for the company.
+ * Collected here and applied in one pass per tab (applyCrossListRemovals_) rather than
+ * deleting inline: a delete per routed row would re-read every list every time.
+ */
+function noteCrossListFiling_(counts, keepTab, company, ticker, nT, nN) {
+  if (!counts) return;
+  (counts._crossList = counts._crossList || []).push({
+    keep: keepTab, t: nT, n: nN,
+    label: (String(company || '').trim() || '(no name)') + (ticker ? ' [' + String(ticker).trim() + ']' : '')
+  });
+}
+
+/** Remove the companies noted above from every reference list except the one they were filed
+ *  on. One read + one write per tab. Returns the number of rows removed. */
+function applyCrossListRemovals_(ss, counts) {
+  var pending = counts && counts._crossList;
+  if (!pending || !pending.length) return 0;
+  counts._crossList = [];
+  var log = counts._log = counts._log || [];
+  var removed = 0;
+
+  REF_LIST_TABS.forEach(function (tabName) {
+    var drop = pending.filter(function (p) { return p.keep !== tabName; });
+    if (!drop.length) return;
+    var sh = ss.getSheetByName(tabName);
+    if (!sh) return;
+    var lr = sh.getLastRow();
+    if (lr < 2) return;
+    var width = tabName === 'Watchlist' ? 13 : 10;
+    width = Math.min(width, sh.getMaxColumns());
+    var byT = {}, byN = {};
+    drop.forEach(function (p) {
+      if (p.t) byT[p.t] = p.label; else if (p.n) byN[p.n] = p.label;
+    });
+    var vals = sh.getRange(2, 1, lr - 1, width).getValues();
+    var kept = [], hits = [];
+    vals.forEach(function (r) {
+      var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+      if (!company && !ticker) return;
+      var t = normTicker_(ticker), n = normName_(company);
+      var label = (t && byT[t]) || (!t && n && byN[n]);
+      if (label) { hits.push(label); return; }          // filed elsewhere now - drop it
+      kept.push(r);
+    });
+    if (!hits.length) return;
+    clearBody_(sh);
+    if (kept.length) sh.getRange(2, 1, kept.length, width).setValues(kept);
+    applyFormat_(sh, headerLenByName_(tabName) || width);
+    if (MOVABLE[tabName]) forceMoveCheckboxes_([tabName]);
+    removed += hits.length;
+    hits.forEach(function (h) {
+      log.push('MOVED OFF ' + tabName + ' - ' + h + ' is now filed on another list.');
+    });
+  });
+  if (removed) counts._crossRemoved = (counts._crossRemoved || 0) + removed;
+  return removed;
+}
+
+/* ===================== REPAIR: DUPLICATES, CROSS-LIST, ORPHANED ADDS ================= */
+
+/* One action for the three states the Health Check reports on the reference lists:
+ *   1. the same company listed twice on ONE list;
+ *   2. the same company filed on TWO lists (contradictory decisions);
+ *   3. a "Pending Kintone Add" hold row with nothing staged on Adds behind it.
+ * Nothing is deleted before the operator sees the counts and confirms, no review data is
+ * discarded (fields are merged onto the row that survives), and every change is named in the
+ * History Log. Safe to re-run - a second run finds nothing. */
 var DEDUPE_TABS = [
   { name: 'Watchlist', width: 13 },
   { name: 'FR Exclude', width: 10 },
@@ -3437,41 +3533,66 @@ var DEDUPE_TABS = [
   { name: 'In DB Reference', width: 10 }
 ];
 
-function dedupeReferenceLists() { return withDocLock_(dedupeReferenceLists_impl_); }
+function repairReferenceLists() { return withDocLock_(repairReferenceLists_impl_); }
 
-/** Menu: merge and remove duplicate rows across the reference lists. */
-function dedupeReferenceLists_impl_() {
+/** Menu: repair duplicate, contradictory and orphaned rows across the reference lists. */
+function repairReferenceLists_impl_() {
   var ss = SpreadsheetApp.getActive();
-  var plans = [], total = 0;
+
+  // ---- phase 1: duplicates within one list ----
+  var plans = [], dupTotal = 0;
   DEDUPE_TABS.forEach(function (def) {
     var sh = ss.getSheetByName(def.name);
     if (!sh) return;
     var lr = sh.getLastRow();
-    if (lr < 3) return;                                   // 0 or 1 data rows - nothing to merge
+    if (lr < 3) return;
     var width = Math.min(def.width, sh.getMaxColumns());
     var plan = dedupePlan_(sh.getRange(2, 1, lr - 1, width).getValues(), width);
     if (!plan.removed.length) return;
     plans.push({ sh: sh, name: def.name, plan: plan, width: width });
-    total += plan.removed.length;
+    dupTotal += plan.removed.length;
   });
 
-  if (!total) { toast_('No duplicate rows found on the reference lists.'); return; }
+  // ---- phase 2: the same company filed on two lists ----
+  var cross = crossListPlan_(ss, plans);
+
+  // ---- phase 3: hold rows with nothing staged behind them ----
+  var orphans = orphanHoldPlan_(ss);
+
+  var total = dupTotal + cross.removed.length + orphans.restage.length + orphans.clear.length;
+  if (!total) { toast_('Reference lists are consistent - nothing to repair.'); return; }
+
+  var lines = [];
+  if (dupTotal) {
+    lines.push('DUPLICATE ROWS (same company twice on one list): ' + dupTotal);
+    plans.forEach(function (p) { lines.push('   ' + p.name + ': ' + p.plan.removed.length); });
+  }
+  if (cross.removed.length) {
+    lines.push('FILED ON TWO LISTS (contradictory decisions): ' + cross.removed.length);
+    lines.push('   ' + cross.removed.slice(0, 4).join('\n   '));
+  }
+  if (orphans.restage.length) {
+    lines.push('PENDING ADDS WITH NOTHING STAGED - will be re-staged on Adds: ' + orphans.restage.length);
+    lines.push('   ' + orphans.restage.slice(0, 4).map(function (o) { return o.label; }).join('\n   '));
+  }
+  if (orphans.clear.length) {
+    lines.push('PENDING ADDS WITH NO TIER - the Add marking will be cleared: ' + orphans.clear.length);
+    lines.push('   ' + orphans.clear.slice(0, 4).map(function (o) { return o.label; }).join('\n   '));
+  }
 
   var ui = SpreadsheetApp.getUi();
-  var breakdown = plans.map(function (p) {
-    return '   ' + p.name + ': ' + p.plan.removed.length + ' duplicate(s), ' +
-      p.plan.kept.length + ' row(s) remain';
-  }).join('\n');
-  var sample = plans[0].plan.removed.slice(0, 5).join('\n   ');
-  if (ui.alert('Merge duplicate rows?',
-      total + ' duplicate row(s) found:\n\n' + breakdown +
-      '\n\nFor example, from ' + plans[0].name + ':\n   ' + sample +
-      '\n\nFor each company the row with the most recent Ticker Reviewed Date is KEPT, and any ' +
-      'field it is missing is filled in from the duplicate - so no reviewed date, analyst, ' +
-      'tier or note is lost. The extra rows are then deleted and every one is listed in the ' +
-      'History Log.\n\nProceed?',
+  if (ui.alert('Repair the reference lists?',
+      total + ' item(s) to repair:\n\n' + lines.join('\n') +
+      '\n\nRULES\n' +
+      '- Duplicates: the row with the most recent Ticker Reviewed Date is kept, and any field ' +
+      'it is missing is filled in from the other copy. No reviewed date, analyst, tier or note ' +
+      'is lost.\n' +
+      '- Two lists: the most recent decision wins; the older filing is removed.\n' +
+      '- Pending Adds: re-staged on Adds when the hold row carries a tier, otherwise the Add ' +
+      'marking is cleared and it stays an ordinary Watchlist row.\n\n' +
+      'Every change is listed in the History Log. Re-running finds nothing.\n\nProceed?',
       ui.ButtonSet.YES_NO) !== ui.Button.YES) {
-    toast_('Dedupe cancelled - nothing was changed.');
+    toast_('Repair cancelled - nothing was changed.');
     return;
   }
 
@@ -3481,17 +3602,162 @@ function dedupeReferenceLists_impl_() {
     if (p.plan.kept.length) p.sh.getRange(2, 1, p.plan.kept.length, p.width).setValues(p.plan.kept);
     applyFormat_(p.sh, headerLenByName_(p.name) || p.width);
     if (MOVABLE[p.name]) forceMoveCheckboxes_([p.name]);
-    p.plan.removed.forEach(function (r) { log.push(p.name + ' - ' + r); });
+    p.plan.removed.forEach(function (r) { log.push('DUPLICATE ' + p.name + ' - ' + r); });
+  });
+  cross.apply();
+  cross.removed.forEach(function (r) { log.push('TWO LISTS ' + r); });
+  var repaired = orphanHoldApply_(ss, orphans);
+  repaired.forEach(function (r) { log.push(r); });
+
+  restyleTabs_(REF_LIST_TABS.concat([TABS.adds.name]));
+  var text = log.join(' | ');
+  if (text.length > 4000) text = text.slice(0, 4000) + ' ... (re-run Pipeline Health Check for the rest)';
+  logHistory_('Repair Reference Lists', REF_LIST_TABS.join(', '),
+    total + ' item(s) repaired - ' + text);
+  toast_('Repaired ' + total + ' item(s). Details in the History Log. ' +
+    'Re-run Pipeline Health Check to confirm.');
+}
+
+/**
+ * The same company filed on more than one reference list. The most recent decision wins:
+ * newest Ticker Reviewed Date, then the row whose Review Assignement actually matches the
+ * list it sits on, then list order. Fields the winner is missing are filled in from the rows
+ * being removed, so nothing recorded is lost. Reads the post-phase-1 rows where a plan exists,
+ * so the two phases cannot fight over the same row.
+ */
+function crossListPlan_(ss, dupPlans) {
+  var planByTab = {};
+  dupPlans.forEach(function (p) { planByTab[p.name] = p; });
+
+  var tabs = [], byKey = {};
+  DEDUPE_TABS.forEach(function (def) {
+    var sh = ss.getSheetByName(def.name);
+    if (!sh) return;
+    var width = Math.min(def.width, sh.getMaxColumns());
+    var rows;
+    if (planByTab[def.name]) {
+      rows = planByTab[def.name].plan.kept;               // already deduped in phase 1
+    } else {
+      var lr = sh.getLastRow();
+      rows = lr < 2 ? [] : sh.getRange(2, 1, lr - 1, width).getValues();
+    }
+    var entry = { name: def.name, sh: sh, width: width, rows: rows, drop: {} };
+    tabs.push(entry);
+    rows.forEach(function (r, i) {
+      var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+      if (!company && !ticker) return;
+      var nT = normTicker_(ticker), nN = normName_(company);
+      var key = nT ? 't:' + nT : (nN ? 'n:' + nN : '');
+      if (!key) return;
+      (byKey[key] = byKey[key] || []).push({ tab: entry, i: i, r: r });
+    });
   });
 
-  var text = log.join(' | ');
-  if (text.length > 4000) {
-    text = text.slice(0, 4000) + ' ... (full list in the Health Check tab - re-run the check)';
-  }
-  logHistory_('Dedupe Reference Lists', plans.map(function (p) { return p.name; }).join(', '),
-    total + ' duplicate row(s) merged into their keeper and removed: ' + text);
-  toast_('Merged and removed ' + total + ' duplicate row(s). Details in the History Log. ' +
-    'Re-run Pipeline Health Check to confirm.');
+  var removed = [], touched = {};
+  Object.keys(byKey).forEach(function (key) {
+    var group = byKey[key];
+    var names = {};
+    group.forEach(function (g) { names[g.tab.name] = true; });
+    if (Object.keys(names).length < 2) return;            // one list only - not a conflict
+    var winner = crossListWinner_(group);
+    group.forEach(function (g) {
+      if (g === winner) return;
+      for (var c = 0; c < Math.min(winner.tab.width, g.tab.width); c++) {
+        if (cellBlank_(winner.r[c]) && !cellBlank_(g.r[c])) winner.r[c] = g.r[c];
+      }
+      g.tab.drop[g.i] = true;
+      touched[g.tab.name] = true;
+      touched[winner.tab.name] = true;   // it was merged into - it has to be written back too
+      removed.push((String(g.r[0] || '').trim() || '(no name)') +
+        (g.r[1] ? ' [' + String(g.r[1]).trim() + ']' : '') +
+        ' removed from ' + g.tab.name + ', kept on ' + winner.tab.name);
+    });
+  });
+
+  return {
+    removed: removed,
+    apply: function () {
+      tabs.forEach(function (t) {
+        if (!touched[t.name]) return;          // nothing dropped from or merged into this list
+        var kept = t.rows.filter(function (r, i) { return !t.drop[i]; });
+        clearBody_(t.sh);
+        if (kept.length) t.sh.getRange(2, 1, kept.length, t.width).setValues(kept);
+        applyFormat_(t.sh, headerLenByName_(t.name) || t.width);
+        if (MOVABLE[t.name]) forceMoveCheckboxes_([t.name]);
+      });
+    }
+  };
+}
+
+/** Which filing of a company survives when it appears on more than one list. */
+function crossListWinner_(group) {
+  var best = null, bestScore = null;
+  group.forEach(function (g) {
+    var reviewed = dateMs_(g.r[3]);
+    var assignment = String(g.r[2] || '').trim();
+    var fits = (g.tab.name === 'Watchlist')
+      ? (assignment === 'Watchlist' || assignment === 'Add')
+      : (assignment === (g.tab.name === TABS.inDbRef.name ? 'In DB' : g.tab.name));
+    var score = [reviewed === null ? -1 : reviewed, fits ? 1 : 0, -REF_LIST_TABS.indexOf(g.tab.name)];
+    if (!best || compareScore_(score, bestScore) > 0) { best = g; bestScore = score; }
+  });
+  return best;
+}
+
+/**
+ * Watchlist rows marked "Pending Kintone Add" with nothing staged on Adds and no profile in
+ * Current DB. They will never upload: the staging row was cleared before the import, or
+ * deleted. Where the hold row still carries a tier there is enough to re-stage it; where it
+ * does not, the Add marking is cleared so it reads as the ordinary Watchlist row it now is.
+ */
+function orphanHoldPlan_(ss) {
+  var out = { restage: [], clear: [], sh: ss.getSheetByName('Watchlist') };
+  var sh = out.sh;
+  if (!sh || sh.getLastRow() < 2 || sh.getMaxColumns() < 13) return out;
+  var cache = {};
+  sh.getRange(2, 1, sh.getLastRow() - 1, 13).getValues().forEach(function (r, i) {
+    if (String(r[8] || '').indexOf(PENDING_ADD_NOTE) < 0) return;
+    var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+    if (!company && !ticker) return;
+    var nT = normTicker_(ticker), nN = normName_(company);
+    if (stagedOnAdds_(ss, cache, nT, nN)) return;                       // pair is intact
+    var db = destKeys_(ss, cache, TABS.currentDb.name, 1, 2);
+    if (nT ? db.t[nT] : (nN && db.n[nN])) return;                       // imported already
+    var item = { row: i + 2, r: r, company: company, ticker: ticker,
+      label: (company || '(no name)') + (ticker ? ' [' + ticker + ']' : '') + ' row ' + (i + 2) };
+    if (String(r[6] || '').trim()) out.restage.push(item);              // has a tier
+    else out.clear.push(item);
+  });
+  return out;
+}
+
+/** Re-stage the repairable hold rows on Adds, and clear the Add marking on the rest. */
+function orphanHoldApply_(ss, plan) {
+  var log = [];
+  var adds = ss.getSheetByName(TABS.adds.name);
+  plan.restage.forEach(function (o) {
+    if (!adds) return;
+    var r = o.r;
+    // Adds row: Imported?, Select, Analyst, New Record Flag, AS Business Name, Primary Business
+    // Name, Ticker, Action Status, Tier, Pure-Play, Sector, Description, Inclusion, Tiering,
+    // Folder, Websites, Source Docs. The analyst fills the research fields as usual.
+    adds.appendRow([false, false, String(r[4] || '').trim(), '*', o.company, o.company, o.ticker,
+      ACTION_STATUS_DEFAULT, String(r[6] || '').trim(), '', String(r[11] || '').trim(),
+      DESC_PREFIX, withPrefix_(r[5], RATIONALE_PREFIX), TIER_RATIONALE_PREFIX, '', '', '']);
+    var ar = adds.getLastRow();
+    adds.getRange(ar, 15).setFormula('=F' + ar);
+    adds.getRange(ar, 1, 1, 2).insertCheckboxes();
+    formatRow_(adds, ar, TABS.adds.header.length);
+    log.push('RE-STAGED ' + o.label + ' onto Adds from its Watchlist hold row.');
+  });
+  plan.clear.forEach(function (o) {
+    var note = String(o.r[8] || '').replace(PENDING_ADD_NOTE, '').replace(/\s*-\s*$/, '').trim();
+    plan.sh.getRange(o.row, 3).setValue('Watchlist');
+    plan.sh.getRange(o.row, 9).setValue(note || 'Add marking cleared - nothing was staged on Adds');
+    log.push('CLEARED Add marking on ' + o.label + ' - no tier on the hold row, so it could not ' +
+      'be re-staged; it is now an ordinary Watchlist row.');
+  });
+  return log;
 }
 
 /**
