@@ -77,6 +77,21 @@ ok(found('Routed but missing', 'WARN').length === 1,
   'the row stamped reviewed with no destination record is reported');
 
 /* ---------------- settings ---------------- */
+console.log('\nTEST H4b: an ordinary Watchlist row is NOT mistaken for a pending Add');
+mock.resetSs(); scaffoldAll_(true);
+// Review Assignement reads "Add" but there is no "Pending Kintone Add" note - this is an
+// ordinary reference row, not a profile staged for Kintone. Flagging these buried the real
+// findings under hundreds of mainstream company names on the live Watchlist.
+ss.getSheetByName('Watchlist').appendRow(['Commonwealth Bank of Australia', 'CBA.AU', 'Add',
+  new Date(2026, 3, 1), 'Isaac M', '', '', 'AS Pull', 'ordinary watchlist note', false, '', '', '']);
+// ...while a genuine hold row (carrying the note) still is flagged
+ss.getSheetByName('Watchlist').appendRow(['Real Pending Co', 'RPC', 'Add', new Date(), 'Ethan Guys',
+  '', '1A', 'AS Pull', 'Pending Kintone Add', false, '', '', '']);
+runHealthCheck();
+var holds = found('Hold row without staging row', 'WARN');
+ok(holds.length === 1, 'only the row carrying the Pending Kintone Add note is flagged');
+ok(String(holds[0][4]) === 'RPC', 'and it is the right one');
+
 console.log('\nTEST H5: unusable Settings values are reported');
 mock.resetSs(); scaffoldAll_(true);
 var dash = ss.getSheetByName('Dashboard');
