@@ -6,6 +6,10 @@ Actions. Two environments, selected by branch.
 
 Workflow: `.github/workflows/deploy-apps-script.yml`.
 
+> Updating the workbook **by hand** (paste the file, reload, rescaffold, verify) is in
+> `REBOOT.md`. The post-update checks there apply after an automated deploy too - `clasp`
+> replaces the code, it does not reload anyone's open workbook or scaffold the tabs.
+
 ## Branch model
 
 | Branch       | Role            | Deploys to                              |
@@ -18,8 +22,9 @@ then **promote to production** by merging `main` into `production` (a PR is the
 tidy way). Merging into `production` triggers the live deploy.
 
 Until a `SCRIPT_ID_STAGING` secret is set, pushes to `main` simply skip the
-deploy step (the syntax check still runs), so the test branch never touches
-production.
+deploy step (the syntax and test gates still run), so the test branch never
+touches production. **That is the current state**: a green run on `main` means
+the gates passed, not that any workbook changed. Only `production` deploys.
 
 ## How it works
 

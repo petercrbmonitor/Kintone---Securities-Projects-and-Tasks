@@ -12,9 +12,21 @@ The current, canonical DARB new-securities identification pipeline.
   the end-to-end DARB new-securities sort pipeline (consolidate AlphaSense
   exports, crosscheck against the live database and exclude lists, route
   reviewed companies, and format qualified additions for Kintone bulk upload).
+- `PROCESS.md` - operator/analyst runbook for the weekly cycle.
+- `REBOOT.md` - how to update the live workbook: paste, reload, re-authorize,
+  rescaffold, health check, rollback and troubleshooting.
+- `DEPLOY.md` - automated `clasp` deployment from GitHub Actions.
+- `KINTONE_FORMAT.md` - the Kintone bulk-upload column contract.
 - `ENGINEERING_HANDOFF.md` - engineering handoff covering runtime, OAuth
   scopes, recommended repo layout, `clasp` deployment, architecture map,
   data contract, conventions, testing/CI, and the prioritised backlog.
+- `CODE_AUDIT.md` - code audit and the status of each finding.
+
+### `test/`
+Offline test suite for the pipeline - `npm test`. `gas-mock.js` fakes enough of
+Apps Script for the real `Code.gs` to be loaded and driven in Node, so the tests
+exercise the shipped code rather than copies of it. Also run by CI and as a gate
+before any deploy.
 
 ### `archive/`
 Legacy and superseded Kintone app customizations and supporting docs, kept
