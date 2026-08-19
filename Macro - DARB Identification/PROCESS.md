@@ -111,7 +111,9 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
   - **ERROR = schema drift.** A column inserted mid-schema makes every read one column out -
     the failure mode that has bitten this workbook before. Fix these first.
   - **WARN = contradictions between tabs**: reviewed rows that never routed, a staged Add a
-    later decision overruled, a `Pending Kintone Add` hold row with nothing staged behind it, a
+    later decision overruled, a `Pending Kintone Add` hold row with nothing staged behind it
+    (identified by that note, not by `Review Assignement` reading "Add" - many ordinary
+    reference rows carry that value), a
     company filed on two lists at once, the same company listed twice on one list, or a
     Settings value that cannot be read (so a default is silently in use).
 - **Merge duplicate rows on reference lists** - fixes the Health Check's `Duplicate row`

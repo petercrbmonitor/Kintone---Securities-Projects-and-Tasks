@@ -3775,8 +3775,12 @@ function healthCheckState_(ss, cache, add) {
   var wl = ss.getSheetByName('Watchlist');
   if (wl && wl.getLastRow() >= 2 && wl.getMaxColumns() >= 13) {
     wl.getRange(2, 1, wl.getLastRow() - 1, 13).getValues().forEach(function (r, i) {
-      var isHold = String(r[2] || '').trim() === 'Add' ||
-                   String(r[8] || '').indexOf(PENDING_ADD_NOTE) >= 0;
+      // A hold row is identified ONLY by the note this script writes when it stages an Add.
+      // Review Assignement = "Add" is NOT sufficient on its own: plenty of ordinary Watchlist
+      // rows carry that value for unrelated reasons (imports, earlier processes), and treating
+      // them as pending Kintone adds flagged hundreds of perfectly normal names - including
+      // rows 2-5 of the live list. Every hold row, old code and new, carries the note.
+      var isHold = String(r[8] || '').indexOf(PENDING_ADD_NOTE) >= 0;
       if (!isHold) return;
       var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
       var nT = normTicker_(ticker), nN = normName_(company);
