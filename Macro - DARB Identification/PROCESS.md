@@ -139,3 +139,5 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
 - The single **Kintone Upload** tab replaces the old `Kintone Profiles` / `Kintone Source Docs`
   tabs (also auto-deleted).
 - After a script update, run **Rescaffold / Restyle Tabs** once and reload the workbook.
+  The full update runbook - paste, reload, re-authorize, rescaffold, health check, rollback - is
+  in `REBOOT.md`.

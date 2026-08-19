@@ -6,6 +6,10 @@ Actions. Two environments, selected by branch.
 
 Workflow: `.github/workflows/deploy-apps-script.yml`.
 
+> Updating the workbook **by hand** (paste the file, reload, rescaffold, verify) is in
+> `REBOOT.md`. The post-update checks there apply after an automated deploy too - `clasp`
+> replaces the code, it does not reload anyone's open workbook or scaffold the tabs.
+
 ## Branch model
 
 | Branch       | Role            | Deploys to                              |
