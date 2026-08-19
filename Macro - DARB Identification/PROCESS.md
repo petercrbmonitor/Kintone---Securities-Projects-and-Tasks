@@ -114,6 +114,13 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
     later decision overruled, a `Pending Kintone Add` hold row with nothing staged behind it, a
     company filed on two lists at once, the same company listed twice on one list, or a
     Settings value that cannot be read (so a default is silently in use).
+- **Merge duplicate rows on reference lists** - fixes the Health Check's `Duplicate row`
+  findings in bulk across Watchlist / FR Exclude / Confirmed Exclude / In DB Reference. For
+  each company the row with the most recent `Ticker Reviewed Date` is kept and any field it is
+  missing is filled in from the duplicate, so no reviewed date, analyst, tier or note is lost
+  whichever copy carried it. Shows the counts and asks before deleting anything, and names
+  every removed row in the History Log. Safe to re-run. **Current DB is not included** - it is
+  rebuilt from the Kintone export each refresh, so a duplicate there has to be fixed in Kintone.
 - **Hide audit + log tabs** / **Show all tabs**.
 
 ## Tabs at a glance

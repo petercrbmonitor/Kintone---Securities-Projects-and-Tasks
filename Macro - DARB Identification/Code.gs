@@ -357,6 +357,7 @@ function onOpen() {
       .addItem('Clear Sort queue (discard untriaged rows)', 'clearSortQueue')
       .addSeparator()
       .addItem('Pipeline Health Check', 'runHealthCheck')
+      .addItem('Merge duplicate rows on reference lists', 'dedupeReferenceLists')
       .addSeparator()
       .addItem('Re-apply Tier/Sector rules (active tab)', 'reapplyTierRules')
       .addItem('Check Tier/Sector rules (active tab)', 'checkTierRules')
@@ -3412,6 +3413,159 @@ function downloadKintoneUploadCsv() {
     Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + '.csv',
     'Kintone Upload CSV');
   markStep_('8. Download Kintone Upload CSV', 'CSV downloaded');
+}
+
+/* ========================= DEDUPE REFERENCE LISTS (MERGE) ========================== */
+
+/* Reference lists that can accumulate duplicate rows - a legacy import run twice, a bulk
+ * paste, or the same company arriving under two name spellings for one ticker. Duplicates
+ * are not harmless: the crosscheck keeps the FIRST match it finds, so if the other copy is
+ * the one carrying the Ticker Reviewed Date, that review is invisible and the company keeps
+ * coming back for review.
+ *
+ * The merge is deliberately non-destructive about DATA: for each company the row with the
+ * most recent reviewed date wins, and every field it is missing is filled in from the copies
+ * being removed - so no reviewed date, analyst, tier or note is lost, whichever row carried
+ * it. Only then are the extra rows dropped, and every one of them is named in the History Log.
+ *
+ * Current DB is NOT included: it is rebuilt from the Kintone export on every refresh, so a
+ * duplicate there has to be fixed in Kintone or it comes straight back. */
+var DEDUPE_TABS = [
+  { name: 'Watchlist', width: 13 },
+  { name: 'FR Exclude', width: 10 },
+  { name: 'Confirmed Exclude', width: 10 },
+  { name: 'In DB Reference', width: 10 }
+];
+
+function dedupeReferenceLists() { return withDocLock_(dedupeReferenceLists_impl_); }
+
+/** Menu: merge and remove duplicate rows across the reference lists. */
+function dedupeReferenceLists_impl_() {
+  var ss = SpreadsheetApp.getActive();
+  var plans = [], total = 0;
+  DEDUPE_TABS.forEach(function (def) {
+    var sh = ss.getSheetByName(def.name);
+    if (!sh) return;
+    var lr = sh.getLastRow();
+    if (lr < 3) return;                                   // 0 or 1 data rows - nothing to merge
+    var width = Math.min(def.width, sh.getMaxColumns());
+    var plan = dedupePlan_(sh.getRange(2, 1, lr - 1, width).getValues(), width);
+    if (!plan.removed.length) return;
+    plans.push({ sh: sh, name: def.name, plan: plan, width: width });
+    total += plan.removed.length;
+  });
+
+  if (!total) { toast_('No duplicate rows found on the reference lists.'); return; }
+
+  var ui = SpreadsheetApp.getUi();
+  var breakdown = plans.map(function (p) {
+    return '   ' + p.name + ': ' + p.plan.removed.length + ' duplicate(s), ' +
+      p.plan.kept.length + ' row(s) remain';
+  }).join('\n');
+  var sample = plans[0].plan.removed.slice(0, 5).join('\n   ');
+  if (ui.alert('Merge duplicate rows?',
+      total + ' duplicate row(s) found:\n\n' + breakdown +
+      '\n\nFor example, from ' + plans[0].name + ':\n   ' + sample +
+      '\n\nFor each company the row with the most recent Ticker Reviewed Date is KEPT, and any ' +
+      'field it is missing is filled in from the duplicate - so no reviewed date, analyst, ' +
+      'tier or note is lost. The extra rows are then deleted and every one is listed in the ' +
+      'History Log.\n\nProceed?',
+      ui.ButtonSet.YES_NO) !== ui.Button.YES) {
+    toast_('Dedupe cancelled - nothing was changed.');
+    return;
+  }
+
+  var log = [];
+  plans.forEach(function (p) {
+    clearBody_(p.sh);
+    if (p.plan.kept.length) p.sh.getRange(2, 1, p.plan.kept.length, p.width).setValues(p.plan.kept);
+    applyFormat_(p.sh, headerLenByName_(p.name) || p.width);
+    if (MOVABLE[p.name]) forceMoveCheckboxes_([p.name]);
+    p.plan.removed.forEach(function (r) { log.push(p.name + ' - ' + r); });
+  });
+
+  var text = log.join(' | ');
+  if (text.length > 4000) {
+    text = text.slice(0, 4000) + ' ... (full list in the Health Check tab - re-run the check)';
+  }
+  logHistory_('Dedupe Reference Lists', plans.map(function (p) { return p.name; }).join(', '),
+    total + ' duplicate row(s) merged into their keeper and removed: ' + text);
+  toast_('Merged and removed ' + total + ' duplicate row(s). Details in the History Log. ' +
+    'Re-run Pipeline Health Check to confirm.');
+}
+
+/**
+ * Group rows by company and merge each group down to one row.
+ * Key: normalized ticker when present, else normalized name - the same identity rule the
+ * crosscheck and every dedup guard use, so what this merges is exactly what they would treat
+ * as one company. Returns { kept: [row], removed: ['Name [TICKER] (row n)'] }.
+ * Row order is preserved: the keeper stays where the group first appeared.
+ */
+function dedupePlan_(vals, width) {
+  var order = [], byKey = {};
+  vals.forEach(function (r, i) {
+    var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+    if (!company && !ticker) return;                      // blank spacer - dropped
+    var nT = normTicker_(ticker), nN = normName_(company);
+    var key = nT ? 't:' + nT : (nN ? 'n:' + nN : 'row:' + i);
+    if (!byKey[key]) { byKey[key] = []; order.push(key); }
+    byKey[key].push({ r: r, i: i });
+  });
+
+  var kept = [], removed = [];
+  order.forEach(function (key) {
+    var group = byKey[key];
+    if (group.length === 1) { kept.push(group[0].r); return; }
+    var keeper = dedupeKeeper_(group);
+    var merged = keeper.r.slice();
+    group.forEach(function (o) {
+      if (o === keeper) return;
+      for (var c = 0; c < width; c++) {                   // fill only what the keeper lacks
+        if (cellBlank_(merged[c]) && !cellBlank_(o.r[c])) merged[c] = o.r[c];
+      }
+      removed.push((String(o.r[0] || '').trim() || '(no name)') +
+        (o.r[1] ? ' [' + String(o.r[1]).trim() + ']' : '') + ' row ' + (o.i + 2));
+    });
+    kept.push(merged);
+  });
+  return { kept: kept, removed: removed };
+}
+
+/** True for an empty cell (a FALSE checkbox counts as a value, not a blank). */
+function cellBlank_(v) {
+  return v === undefined || v === null || String(v).trim() === '';
+}
+
+/** Milliseconds for a date-ish cell, or null. */
+function dateMs_(v) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v.getTime();
+  if (typeof v === 'string' && isDateish_(v)) {
+    var t = Date.parse(v);
+    return isNaN(t) ? null : t;
+  }
+  return null;
+}
+
+/** Which row of a duplicate group survives: most recently reviewed, then the most complete,
+ *  then the one nearest the top of the list. */
+function dedupeKeeper_(group) {
+  var best = null, bestScore = null;
+  group.forEach(function (o) {
+    var reviewed = dateMs_(o.r[3]);
+    var filled = 0;
+    for (var c = 0; c < o.r.length; c++) if (!cellBlank_(o.r[c])) filled++;
+    var score = [reviewed === null ? -1 : reviewed, filled, -o.i];
+    if (!best || compareScore_(score, bestScore) > 0) { best = o; bestScore = score; }
+  });
+  return best;
+}
+
+/** Lexicographic compare of two numeric score arrays. */
+function compareScore_(a, b) {
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
+  }
+  return 0;
 }
 
 /* ============================ PIPELINE HEALTH CHECK ================================= */
