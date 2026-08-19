@@ -19,6 +19,47 @@ below are hardening and robustness items, ordered by priority. Several mirror
 the handoff backlog (section 13); this audit confirms them against the code and
 adds specifics.
 
+## Status - 2026-08-18 update
+
+Three defects reported from live use were diagnosed, reproduced against the then-current
+build, and fixed (see the git history on `claude/darb-identification-fixes-1ucd2g`):
+
+- **Misrouted Adds.** `verifyRoutedDest_` accepted a Watchlist row as proof that an `Add` had
+  been routed. Every Add also writes a Watchlist hold row, so a row whose reviewed date was
+  already stamped verified as done and the Adds staging row was never created. Add is now
+  satisfied only by `Adds` or `Current DB`; the hold row is a companion, never evidence.
+- **Reviewed companies reappearing on Sort.** `Adds` and a new `In DB Reference` list are now
+  crosscheck reference lists (`In DB` previously wrote nothing at all); an exact name match
+  against a reviewed list excludes, so a changed ticker string no longer makes a reviewed
+  company new; rows in flight with an analyst are held back; the Sort queue is carried forward
+  instead of wiped; and a stale ticker surfaced for re-review is no longer **deleted** from its
+  reference list - that deletion destroyed the review history, so the next crosscheck saw a
+  brand-new name.
+- **Step order.** Routing (`Process Reviews`) is step 1, and Refresh / Import / Crosscheck run
+  the sweep themselves and warn when reviewed rows are still unrouted.
+
+Findings closed by that work and the follow-ups:
+
+- **#5 Ticker canonicalization** - `normTicker_` folds `:`, `/` and whitespace to `.`.
+- **#6 Automated tests** - `test/` + `npm test`, 122 assertions over 5 suites, wired into CI
+  and into the pre-deploy gate. The mock loads the real `Code.gs`, so there are no extracted
+  helper copies to drift (the reason this was deferred).
+- **#11 `tickerMap` field semantics** - reference columns are declared per list in
+  `CROSSCHECK_REFS` instead of a single hardcoded `r[3]`.
+- **Handoff backlog #5 (`selfTest_`)** - superseded by **Utilities > Pipeline Health Check**,
+  which asserts every tab header per column, each analyst tab against `INTERN_HEADER`, and the
+  `MOVABLE` Select / Move To positions, then reports cross-tab contradictions. Read-only.
+
+Still open: **#4** (batch writes) and the handoff's schema-version migration. Neither blocks
+production.
+
+**Note on the sections below.** They were written against the pre-redesign schema and are kept
+as the historical record. Several tabs they cite (`Review`, `Attention - DB Drift`,
+`Kintone Profiles`, `Kintone Source Docs`, `In DB Log`, `Stats`, `Config`) have since been
+retired or merged, and the column counts quoted (Adds 22, Intern 16) are no longer current -
+`TABS` and `INTERN_HEADER` in `Code.gs` are the source of truth, and the Health Check verifies
+the live workbook against them.
+
 ### Verified correct (confidence checks)
 
 - **Syntax**: `node --check` passes (checked via a `.js` copy; `.gs` is the
@@ -51,8 +92,8 @@ Resolved on the test branch:
   when no header is found.
 - **#8 Stale comment** - the `// 21` Adds-width comment is corrected to `// 22`.
 
-Still open: #4 (batch writes), #5 (ticker canonicalization), #6 (unit tests),
-#7 (Watchlist append width), #9-#11. None block production.
+Still open: #4 (batch writes), #9, #10. See the 2026-08-18 status section above for what
+has closed since. None block production.
 
 ## Findings
 
@@ -62,13 +103,13 @@ Still open: #4 (batch writes), #5 (ticker canonicalization), #6 (unit tests),
 | 2 | Medium | Output integrity | **Resolved** - build-time validation in `buildKintoneUpload` |
 | 3 | Medium | Import robustness | **Resolved** - dynamic RAW header detection + name-resolved columns |
 | 4 | Medium | Performance | Per-row `appendRow`/`deleteRow` vs the 6-minute limit |
-| 5 | Medium | Matching | Ticker canonicalization gap (`9923:HK` vs `9923.HK`) |
-| 6 | Medium | Safety net | No automated tests / CI guard |
+| 5 | Medium | Matching | **Resolved** - `normTicker_` folds `:`, `/` and whitespace to `.` |
+| 6 | Medium | Safety net | **Resolved** - `test/` + `npm test` in CI and the deploy gate |
 | 7 | Low | Consistency | **Resolved** - `routeRow_` Watchlist append padded to 13 values |
 | 8 | Low | Docs | Stale `// 21` comment in `buildKintoneUpload` (Adds is 22 wide) |
 | 9 | Low | Config | `seedConfig_` exact-label match vs `configValue_` prefix match |
 | 10 | Info | Startup | `onOpen` re-scaffolds on every open |
-| 11 | Info | Semantics | `tickerMap` field meaning differs for Current DB rows |
+| 11 | Info | Semantics | **Resolved** - reference columns declared per list in `CROSSCHECK_REFS` |
 
 ### 1. [High] No concurrency control (`LockService`)
 
