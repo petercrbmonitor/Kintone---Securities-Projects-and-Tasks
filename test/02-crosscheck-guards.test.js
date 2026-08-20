@@ -41,4 +41,55 @@ ok(last.indexOf('0 new to SORT') === 0 || /^\d+ in - 0 new to SORT/.test(last),
   'second run reports 0 new (re-review not double-counted)');
 ok(rowsOf('Sort', 14).length === 1, 'and Sort still holds exactly one row');
 
+
+/* ============ stale queue rows ============ */
+console.log('\nTEST 15: a queued name that is now in Current DB is dropped from Sort');
+mock.resetSs(); scaffoldAll_(true);
+var sortSh = ss.getSheetByName('Sort');
+// queued last cycle as a brand-new name...
+sortSh.appendRow(['Gemini Space Station Inc', 'GEMI', false, '', '', '', '', '', '', '', '', '', 'AS Pull', '']);
+// ...and added to Kintone since, so the refresh now has it
+ss.getSheetByName('Current DB').appendRow(['Gemini Space Station Inc', 'GEMI', 'Active', '1A',
+  '', '', '', '', '', false, 'R9', 'Exchanges/Platforms', '']);
+ss.getSheetByName('Clean Pull').appendRow(['Some Other Co', 'OTH', '', '', '', '', '']);
+runCrosscheck();
+var t15 = rowsOf('Sort', 14).map(function (r) { return String(r[1]); });
+ok(t15.indexOf('GEMI') < 0, 'the already-tracked queue row is gone');
+ok(t15.indexOf('OTH') >= 0, 'the genuinely new name is there');
+ok(rowsOf('History Log', 4).map(function (r) { return String(r[3]); }).join(' ')
+   .indexOf('now tracked on Current DB') >= 0, 'and the log says why it went');
+
+console.log('\nTEST 16: near-match and drift rows are NOT dropped (they need a human answer)');
+mock.resetSs(); scaffoldAll_(true);
+var sortSh2 = ss.getSheetByName('Sort');
+sortSh2.appendRow(['Acme Holdings PLC', 'ACM.L', false, '', '', '', '', '', '', '', '', '', 'Review',
+  'Near-match (exact name) vs "Acme Holdings Inc" on Current DB - confirm new vs same.']);
+sortSh2.appendRow(['Renamed Corp', 'RNM', false, '', '', '', '', '', '', '', '', '', 'DB Drift',
+  'Name changed - same ticker as "Old Name Corp" on Current DB.']);
+ss.getSheetByName('Current DB').appendRow(['Acme Holdings Inc', 'ACME', 'Active', '1A', '', '', '', '', '', false, 'R1', '', '']);
+ss.getSheetByName('Current DB').appendRow(['Old Name Corp', 'RNM', 'Active', '1A', '', '', '', '', '', false, 'R2', '', '']);
+ss.getSheetByName('Clean Pull').appendRow(['Filler Co', 'FIL', '', '', '', '', '']);
+runCrosscheck();
+var t16 = rowsOf('Sort', 14).map(function (r) { return String(r[1]); });
+ok(t16.indexOf('ACM.L') >= 0, 'the near-match question is still on the queue');
+ok(t16.indexOf('RNM') >= 0, 'and the unresolved drift row too');
+
+console.log('\nTEST 17: a drift row goes once the DB name matches again');
+mock.resetSs(); scaffoldAll_(true);
+ss.getSheetByName('Sort').appendRow(['Renamed Corp', 'RNM', false, '', '', '', '', '', '', '', '', '',
+  'DB Drift', 'Name changed - same ticker as "Old Name Corp" on Current DB.']);
+ss.getSheetByName('Current DB').appendRow(['Renamed Corp', 'RNM', 'Active', '1A', '', '', '', '', '', false, 'R2', '', '']);
+ss.getSheetByName('Clean Pull').appendRow(['Filler Co', 'FIL', '', '', '', '', '']);
+runCrosscheck();
+ok(rowsOf('Sort', 14).map(function (r) { return String(r[1]); }).indexOf('RNM') < 0,
+  'the drift is resolved, so the row is dropped');
+
+console.log('\nTEST 18: the Health Check flags a stale queue row before you re-run Crosscheck');
+mock.resetSs(); scaffoldAll_(true);
+ss.getSheetByName('Sort').appendRow(['Gemini Space Station Inc', 'GEMI', false, '', '', '', '', '', '', '', '', '', 'AS Pull', '']);
+ss.getSheetByName('Current DB').appendRow(['Gemini Space Station Inc', 'GEMI', 'Active', '1A', '', '', '', '', '', false, 'R9', '', '']);
+runHealthCheck();
+var hc = rowsOf('Health Check', 7).filter(function (r) { return String(r[1]) === 'Already tracked on Sort'; });
+ok(hc.length === 1 && String(hc[0][4]) === 'GEMI', 'reported, with the ticker named');
+
 H.finish();

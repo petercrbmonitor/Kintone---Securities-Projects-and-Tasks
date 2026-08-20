@@ -351,6 +351,7 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('Utilities')
       .addItem('Build Clean Pull (manual rebuild)', 'buildCleanPull')
+      .addItem('Clear imported pull files (fresh start)', 'clearRawImports')
       .addItem('Import legacy Watchlist (one-time)', 'showWatchlistImportDialog')
       .addItem('Rescaffold / Restyle Tabs', 'rescaffold')
       .addItem('Start New Cycle (reset step checkmarks)', 'startNewCycle')
@@ -496,10 +497,36 @@ var WORKFLOW_LINES = [
   '   Source Documents - one per line:   Name | Note | URL | Date',
   '        e.g.   PR - Launch | Added Press Release | https://company.com/pr | 2026-06-09',
   '',
+  'Utilities - the housekeeping actions, in the order you would normally reach for them:',
+  '   - Pipeline Health Check - read-only audit of the whole workbook, written to a Health Check',
+  '     tab. ERROR = schema drift (a column out of place; fix these first). WARN = contradictions:',
+  '     reviewed rows that never filed, staged Adds a later decision overruled, a company on two',
+  '     lists, a queue row whose company is already tracked. Run it whenever something looks off.',
+  '   - Repair reference lists - fixes those contradictions in bulk: duplicate rows, companies',
+  '     filed on two lists, and pending Adds with nothing staged. Shows the counts and asks first;',
+  '     no reviewed date, analyst, tier or note is lost; every change goes to the History Log.',
+  '   - Rescaffold / Restyle Tabs - repairs headers, dropdowns and formatting. Run it after any',
+  '     script update.',
+  '   - Start New Cycle - clears the step checkmarks for a fresh week.',
+  '   - Clear Sort queue - discards untriaged Sort rows (Crosscheck otherwise carries them over).',
+  '',
+  'STARTING A CLEAN CYCLE WITH A FRESH PULL FILE',
+  '   1. Process Reviews - file every reviewed row before anything reads the reference data.',
+  '   2. Repair reference lists, then Pipeline Health Check - start from consistent references.',
+  '   3. Refresh DB References - upload the newest Kintone export so Current DB is up to date.',
+  '   4. Clear Sort queue - only if you want to abandon what is still untriaged. Otherwise rows',
+  '      stay, and any that have since been resolved are dropped automatically by Crosscheck.',
+  '   5. Import Pull Files - the new AlphaSense export. Re-importing a file of the same name',
+  '      replaces its RAW tab, but an older file under a different name leaves its RAW tab behind',
+  '      and Clean Pull still stacks it. Utilities > Show all tabs, delete stale RAW - ... tabs,',
+  '      then import, if you want only this week in Clean Pull.',
+  '   6. Run Crosscheck - anything already in Current DB or on a list is excluded, not queued.',
+  '   7. Carry on from step 5 of the cycle above (Distribute Selected to Interns).',
+  '',
   'Tips:',
-  '   - Utilities > Start New Cycle clears the step checkmarks for a fresh week.',
-  '   - Utilities > Rescaffold / Restyle Tabs repairs headers, dropdowns and formatting.',
-  '   - Reference docs in the repo: PROCESS.md, KINTONE_FORMAT.md, ENGINEERING_HANDOFF.md.'
+  '   - A ticker already in Current DB should never appear on Sort. If one does, run Crosscheck:',
+  '     it drops queue rows that have since been resolved and logs the reason for each.',
+  '   - Reference docs in the repo: PROCESS.md, REBOOT.md, KINTONE_FORMAT.md, ENGINEERING_HANDOFF.md.'
 ];
 
 /** Build / refresh the single "Dashboard" tab: status table (top), Settings (middle), workflow
@@ -1997,9 +2024,15 @@ function runCrosscheck() {
 
   // Carry the existing Sort queue forward. Blind-clearing it discarded untriaged rows (and the
   // operator's Select / Assign To work) and let the same company be re-issued next run.
+  // BUT a carried row is only still work if it is still UNRESOLVED. A queue that is merely
+  // preserved goes stale: a company that was genuinely new last week and has since been added
+  // to the DB (or filed on a list, or handed to an analyst) sat on Sort for ever, which is why
+  // tickers already in Current DB were showing up in the queue. Every carried row is therefore
+  // re-tested against the reference lists that were just loaded, and the resolved ones are
+  // dropped with a reason in the History Log.
   var sortSh = ensureTab_(TABS.sort);
   var sortWidth = TABS.sort.header.length;
-  var carried = [], onSort = {};
+  var carried = [], onSort = {}, resolvedOff = [];
   var slr = sortSh.getLastRow();
   if (slr >= 2) {
     sortSh.getRange(2, 1, slr - 1, sortWidth).getValues().forEach(function (r) {
@@ -2007,6 +2040,11 @@ function runCrosscheck() {
       if (!c && !t) return;
       var nt = normTicker_(t), nn = normName_(c);
       if ((nt && onSort['t:' + nt]) || (!nt && nn && onSort['n:' + nn])) return; // dedupe the queue
+      var why = carriedResolved_(r, nt, nn, tickerMap, inFlight, thresholdDays, resurfaceBlank);
+      if (why) {
+        resolvedOff.push((c || '(no name)') + (t ? ' [' + t + ']' : '') + ' - ' + why);
+        return;                                   // no longer a queue item
+      }
       carried.push(r);
       if (nt) onSort['t:' + nt] = true;
       if (nn) onSort['n:' + nn] = true;
@@ -2159,18 +2197,47 @@ function runCrosscheck() {
 
   logHistory_('Run Crosscheck', 'Clean Pull', considered + ' in - ' + sortRows.length +
     ' new to SORT (incl ' + resurrected + ' re-review, ' + drift + ' DB drift, ' + nearMatch +
-    ' near-match), ' + carried.length + ' carried forward on Sort, ' +
+    ' near-match), ' + carried.length + ' carried forward on Sort' +
+    (resolvedOff.length ? ', ' + resolvedOff.length + ' stale queue row(s) dropped (' +
+      resolvedOff.slice(0, 12).join('; ') + (resolvedOff.length > 12 ? ' ...' : '') + ')' : '') + ', ' +
     exclRows.length + ' EXCLUDED (incl ' + held + ' in flight with an analyst)' +
     (alreadyQueued ? ', ' + alreadyQueued + ' already queued on Sort' : '') +
     (flagged ? ', ' + flagged + ' skipped (flagged ticker)' : ''));
   toast_('Crosscheck: ' + sortRows.length + ' new to SORT' +
     (carried.length ? ' (+' + carried.length + ' carried)' : '') +
+    (resolvedOff.length ? ' (-' + resolvedOff.length + ' resolved, dropped)' : '') +
     (nearMatch ? ', ' + nearMatch + ' near-match' : '') +
     (resurrected ? ', ' + resurrected + ' re-review' : '') +
     (drift ? ', ' + drift + ' DB drift' : '') + '; ' +
     exclRows.length + ' EXCLUDED' +
     (held ? ' (' + held + ' in flight)' : '') +
     (flagged ? ', ' + flagged + ' flagged-ticker skipped' : '') + '.');
+}
+
+/**
+ * Why a row already on Sort is no longer a queue item, or '' if it still needs triage.
+ * Only rows the pull put there as plain new names ("AS Pull", or blank on an older build) are
+ * dropped on an exact TICKER match against a reference list - an exact ticker match means it
+ * IS the tracked security. Rows that exist BECAUSE of a reference match - "Review" near-matches
+ * and "DB Drift" - are deliberate questions for a human and are kept until someone answers
+ * them; a drift row is only dropped once the names actually agree again.
+ * A stale ticker due for re-review is never dropped: that row is the re-review.
+ */
+function carriedResolved_(r, nt, nn, tickerMap, inFlight, thresholdDays, resurfaceBlank) {
+  var flightTab = (nt && inFlight['t:' + nt]) || (nn && inFlight['n:' + nn]);
+  if (flightTab) return 'now in review with ' + flightTab;
+
+  var ex = nt ? tickerMap[nt] : undefined;
+  if (ex === undefined) return '';
+  if (ex.reviewable && isStale_(ex.reviewed, thresholdDays, resurfaceBlank)) return '';  // due again
+
+  var src = String(r[12] || '').trim();
+  if (src === 'AS Pull' || src === '') return 'now tracked on ' + ex.source;
+  if (src === 'DB Drift') {
+    var en = normName_(ex.name);
+    if (nn && en && (nn === en || fuzzyPair_(nn, en))) return 'DB name now matches ' + ex.source;
+  }
+  return '';                                   // Review / re-review rows stay until answered
 }
 
 /** Utilities: empty the Sort queue. Crosscheck now carries untriaged rows forward, so this is
@@ -3427,6 +3494,44 @@ function downloadKintoneUploadCsv() {
   markStep_('8. Download Kintone Upload CSV', 'CSV downloaded');
 }
 
+/**
+ * Utilities: delete every hidden "RAW - ..." import tab and empty Clean Pull.
+ * Re-importing a file with the SAME name replaces its RAW tab, but a file saved under a new
+ * name leaves last week's tab behind - and Build Clean Pull stacks every RAW tab it finds, so
+ * old pulls quietly keep feeding the crosscheck. This is the clean-slate button before a fresh
+ * import. Reference lists, Adds and the analyst tabs are untouched.
+ */
+function clearRawImports() {
+  var ss = SpreadsheetApp.getActive();
+  var raws = ss.getSheets().filter(function (s) { return s.getName().indexOf(RAW_PREFIX) === 0; });
+  if (!raws.length) { toast_('No RAW import tabs to clear.'); return; }
+  var ui = SpreadsheetApp.getUi();
+  var names = raws.map(function (s) { return s.getName(); });
+  if (ui.alert('Clear the imported pull files?',
+      names.length + ' RAW import tab(s) will be deleted and Clean Pull emptied:\n\n   ' +
+      names.slice(0, 12).join('\n   ') + (names.length > 12 ? '\n   ...' : '') +
+      '\n\nBuild Clean Pull stacks EVERY RAW tab, so old pulls keep feeding the crosscheck until ' +
+      'they are removed. Reference lists, Adds and the analyst tabs are not touched.\n\n' +
+      'Import the new file straight afterwards.\n\nProceed?',
+      ui.ButtonSet.YES_NO) !== ui.Button.YES) {
+    toast_('Cancelled - the RAW tabs were left in place.');
+    return;
+  }
+  var gone = 0, stuck = [];
+  raws.forEach(function (sh) {
+    try { ss.deleteSheet(sh); gone++; }
+    catch (e) { stuck.push(sh.getName()); }        // active sheet - cannot delete it right now
+  });
+  var cp = ss.getSheetByName(TABS.cleanPull.name);
+  if (cp) { clearBody_(cp); applyFormat_(cp, TABS.cleanPull.header.length); }
+  logHistory_('Clear RAW Imports', names.join(', '),
+    gone + ' RAW tab(s) deleted, Clean Pull emptied' +
+    (stuck.length ? ' - could not delete (open in the workbook): ' + stuck.join(', ') : ''));
+  toast_('Cleared ' + gone + ' RAW import tab(s) and emptied Clean Pull.' +
+    (stuck.length ? ' Click a different tab and re-run to remove: ' + stuck.join(', ') : '') +
+    ' Import the new pull file next.');
+}
+
 /* ========================= DEDUPE REFERENCE LISTS (MERGE) ========================== */
 
 /* Reference lists that can accumulate duplicate rows - a legacy import run twice, a bulk
@@ -4057,6 +4162,33 @@ function healthCheckState_(ss, cache, add) {
         'is not in Current DB.',
         'It will never upload. Re-review the company, or clear the Add marking on this row.');
     });
+  }
+
+  // 4b. Sort rows for companies that are already tracked - a queue row whose company has since
+  //     been added to the DB or filed on a list. Run Crosscheck to clear them.
+  var sortSh = ss.getSheetByName(TABS.sort.name);
+  if (sortSh && sortSh.getLastRow() >= 2 && sortSh.getMaxColumns() >= TABS.sort.header.length) {
+    var tracked = ['Current DB', 'Watchlist', 'FR Exclude', 'Confirmed Exclude', TABS.inDbRef.name];
+    sortSh.getRange(2, 1, sortSh.getLastRow() - 1, TABS.sort.header.length).getValues()
+      .forEach(function (r, i) {
+        var company = String(r[0] || '').trim(), ticker = String(r[1] || '').trim();
+        if (!company && !ticker) return;
+        var src = String(r[12] || '').trim();
+        if (src !== 'AS Pull' && src !== '') return;      // Review / DB Drift rows belong here
+        var nT = normTicker_(ticker), nN = normName_(company);
+        if (!nT) return;                                   // ticker match only - no false alarms
+        var on = '';
+        tracked.forEach(function (tn) {
+          if (on) return;
+          if (destKeys_(ss, cache, tn, 1, 2).t[nT]) on = tn;
+        });
+        if (!on && stagedOnAdds_(ss, cache, nT, nN)) on = TABS.adds.name;
+        if (!on) return;
+        add('WARN', 'Already tracked on Sort', TABS.sort.name, company, ticker,
+          'Row ' + (i + 2) + ' is queued as a new name, but the ticker is already on ' + on + '.',
+          'Run Crosscheck - it now drops queue rows that have since been resolved. Or tick ' +
+          'Select and use Move To > Remove.');
+      });
   }
 
   // 5. A company on two reference lists at once, or listed twice on one.

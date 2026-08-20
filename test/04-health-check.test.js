@@ -116,4 +116,21 @@ ok(rows('Adds', 17).length === 0, 'it does not route anything');
 ok(String(e3.getRange(1, 9).getValue()) === 'Tier Rationale',
   'and it does not repair the drift it is reporting');
 
+
+console.log('\nTEST H7: clearing imported pull files');
+mock.resetSs(); scaffoldAll_(true);
+var raw1 = ss.insertSheet('RAW - week1.csv'); raw1.appendRow(['Company', 'Ticker']);
+var raw2 = ss.insertSheet('RAW - week2.csv'); raw2.appendRow(['Company', 'Ticker']);
+ss.getSheetByName('Clean Pull').appendRow(['Old Co', 'OLD', '', '', '', '', '']);
+ss.getSheetByName('Watchlist').appendRow(['Keep Me', 'KEEP', 'Watchlist', new Date(), 'Isaac M', '', '', '', '', false, '', '', '']);
+mock.setUiAnswer('NO');
+clearRawImports();
+ok(ss.getSheetByName('RAW - week1.csv') !== null, 'answering No keeps the RAW tabs');
+mock.setUiAnswer('YES');
+clearRawImports();
+ok(ss.getSheetByName('RAW - week1.csv') === null && ss.getSheetByName('RAW - week2.csv') === null,
+  'both RAW tabs are deleted');
+ok(rows('Clean Pull', 7).length === 0, 'Clean Pull is emptied');
+ok(rows('Watchlist', 13).length === 1, 'the reference lists are untouched');
+
 H.finish();
