@@ -31,6 +31,34 @@ After step 8, run **Clear Adds (after Kintone import)** to empty the Adds tab fo
 Clear Adds only **after** the import: the profiles' `Pending Kintone Add` hold rows stay on the
 Watchlist until the next refresh confirms them Active, and clearing early makes step 1 re-stage them.
 
+## Starting a clean cycle with a fresh pull file
+
+Run these in order. Steps 1-3 make the reference data trustworthy *before* anything is
+classified against it; step 6 is then reliable.
+
+| # | Action | Why |
+|---|--------|-----|
+| 1 | **1. Process Reviews** | Files every reviewed row. Nothing else should read the reference lists until this has run. |
+| 2 | **Utilities → Repair reference lists** | Duplicates, companies on two lists, orphaned pending Adds. |
+| 3 | **Utilities → Pipeline Health Check** | Confirms the workbook is consistent. Fix any **ERROR** before going on. |
+| 4 | **2. Refresh DB References** | Upload the newest Kintone export so **Current DB** reflects what is actually tracked. Do this *before* the crosscheck, or names added since the last export look new. |
+| 5 | **Utilities → Clear Sort queue** | Optional. Only if you want to abandon what is still untriaged — otherwise rows are carried over, and any that have since been resolved are dropped automatically. |
+| 6 | **Utilities → Clear imported pull files** | Deletes the hidden `RAW - ...` tabs and empties Clean Pull. **Build Clean Pull stacks every RAW tab it finds**, so last week's export keeps feeding the crosscheck until it is removed. Re-importing a file of the *same name* replaces its tab; a new filename does not. |
+| 7 | **3. Import Pull Files** | The new AlphaSense export. Clean Pull is rebuilt automatically from just this file. |
+| 8 | **4. Run Crosscheck** | Anything already in Current DB or on a reference list is excluded, not queued. |
+| 9 | **5. Distribute Selected to Interns** | Carry on with the normal cycle. |
+
+### A ticker already in Current DB must never be on Sort
+If one is, the queue row is stale — it was queued in an earlier cycle and the company has been
+added since. **Run Crosscheck**: it re-tests every carried row against the reference lists and
+drops the resolved ones, with the reason for each in the History Log
+(`… now tracked on Current DB`). The Health Check reports the same thing as
+`Already tracked on Sort` if you want to see it without re-running.
+
+Rows that exist *because* of a reference match — Source `Review` (near-match) or `DB Drift` —
+are deliberately kept: they are questions for a person. A drift row disappears on its own once
+the DB name matches the pull again.
+
 ## What "Add" writes
 An `Add` produces **two** rows, by design, and neither suppresses the other:
 
@@ -110,6 +138,8 @@ Source `AS Pull`. (Editable text lives in `TIER_RATIONALE_CONFIG` in `Code.gs`.)
 
 ## Utilities
 - **Build Clean Pull** - rebuild Clean Pull from the RAW import tabs without re-importing.
+- **Clear imported pull files** - delete every hidden `RAW - ...` tab and empty Clean Pull, so
+  the next import is the only pull in play. Reference lists, Adds and analyst tabs are untouched.
 - **Import legacy Watchlist** - one-time load of the legacy macro Watchlist.
 - **Rescaffold / Restyle Tabs** - repair headers, dropdowns, formatting and tab colours; also
   clears stale validations and deletes retired tabs. Run this after any script update.
