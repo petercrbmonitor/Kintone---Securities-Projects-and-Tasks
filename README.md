@@ -21,6 +21,9 @@ The current, canonical DARB new-securities identification pipeline.
   scopes, recommended repo layout, `clasp` deployment, architecture map,
   data contract, conventions, testing/CI, and the prioritised backlog.
 - `CODE_AUDIT.md` - code audit and the status of each finding.
+- `PYTHON_REBUILD_PROMPT.md` - development brief for converting the pipeline to a Python
+  application: the business rules to preserve verbatim, Kintone as the live reference source,
+  the analyst queue/one-click workflow, and the regression cases any replacement must pass.
 
 ### `test/`
 Offline test suite for the pipeline - `npm test`. `gas-mock.js` fakes enough of
