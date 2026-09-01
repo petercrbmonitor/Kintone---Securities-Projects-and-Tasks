@@ -272,10 +272,32 @@ insertion misaligns every read, which is why the workbook now ships a schema sel
 
 ## 4. Kintone Integration
 
-Authoritative source for the reference set. Requirements: initial + incremental sync,
-pagination, record IDs, last-modified/revision change detection, explicit field mapping (with
-the misspelled field names above), create/update where required, error handling, rate-limit
-handling, retry with backoff, connection-failure recovery, and a sync log.
+Kintone becomes the authoritative source for the DB reference list. **The REST API supports
+everything this design needs — verified against the current API documentation:**
+
+| Need | API capability | Limit |
+|---|---|---|
+| Read reference records | `GET /k/v1/records.json` | **500 records per request**; `offset` caps at **10,000** — beyond that use the cursor API or the seek method (`$id > <last id> order by $id asc limit 500`) |
+| **Incremental sync** | `query=Updated_datetime > "2026-09-01T00:00:00Z"` | `Updated_datetime`, `Created_datetime`, `$id`, Created/Updated by are all queryable built-ins. Relative helpers (`NOW()`, `FROM_TODAY()`) also available |
+| Create profiles | `POST /k/v1/records.json` | **100 records per request** |
+| **Subtables in one call** | Table fields post as `value: [{ value: {...} }]` per row | Website URLs and Source Documents go up **with the parent record** — no second keyed import |
+| Batched writes | `POST /k/v1/bulkRequest.json` | **20 requests per call, rolled back entirely if any one fails** |
+| Field discovery | `GET /k/v1/app/form/fields.json` | Use it to verify field codes at startup rather than assuming them |
+
+**Platform limits, and what they mean here:** 100 concurrent requests per domain (HTTP 429
+beyond; response headers expose current concurrency — back off around 80%), and **10,000 API
+requests per app per day**. A full reference reload of ~5,000 profiles is ~10 requests. A
+typical incremental sync is 1–2. The daily budget is not a constraint on this workload unless
+something polls carelessly.
+
+**What this removes from the current process:**
+
+- The manual `.xlsx` export. `Current DB` stops being stale between exports — which is the root
+  cause of already-tracked companies appearing as new.
+- The two-file CSV import (Profiles, then Source Docs keyed on AlphaSense Ticker + Primary
+  Business Name). Subtables post with the parent record, so a blank ticker can no longer break
+  the key-match.
+- The manual download/import step at the end of the cycle.
 
 ```text
 Kintone → Sync Layer → Local store → Analyst workflow → Validated change → Kintone
@@ -283,16 +305,40 @@ Kintone → Sync Layer → Local store → Analyst workflow → Validated change
 
 Never require a full refresh per user action.
 
-**Upload contract (preserve exactly).** One parent profile per record, with two subtables:
+### Before building: confirm with the Kintone administrator
+
+1. **App IDs and field codes** for the profiles app and the watchlist app (`app/form/fields.json`).
+   Note the intentionally misspelled codes: `Review Assignement`, `Recomended Sector`,
+   `If Add Recomended Tier`.
+2. **Authentication method.** Per-app API tokens are simplest and are scoped per app — if
+   profiles and watchlist are separate apps, a `bulkRequest` spanning both needs multiple
+   tokens. Password auth or OAuth covers cases API tokens do not. Credentials come from
+   environment variables or a secrets manager, never source control.
+3. **IP allowlisting.** Some Kintone deployments restrict API access by source IP. If yours
+   does, the application host has to be allowlisted — this is a hard blocker, so check first.
+4. **Write permissions.** Read-only tokens are enough for Phases 2–3; record creation needs
+   write scope, which should stay off until parallel testing passes.
+
+### CSV fallback
+
+Keep a CSV/XLSX import path. It is worth having for three reasons: bootstrapping before API
+access is granted, disaster recovery when the API is unreachable, and one-off historical loads.
+
+It should not be the primary path. Reference data that is only as fresh as the last manual
+export is precisely the condition that produces "this company is already in the database, why is
+it in my queue?" — the defect that motivated this rebuild. If the CSV route is used in
+production, the application must display the age of the reference data prominently and warn when
+it exceeds a configured threshold.
+
+**Upload contract (preserve exactly).** One parent profile per record with two subtables:
 Website URLs and Source Documents. In the current CSV that is 19 columns — cols 1–12 parent
 (New record flag, Primary Business Name, AlphaSense Ticker, Analyst, Profile Review - Action
 Status, CRBM Tier, Pure-Play, Sector, Primary Business Description, Inclusion Rationale,
 Tiering Rationale, Folder Name), 13–14 Website subtable, 15–19 Source Documents subtable. The
-`New record flag` (`*`) marks the first row of each record's block only; subtable rows are keyed
-on AlphaSense Ticker + Primary Business Name. A blank ticker breaks that key-match — validate
-before export. Analyst capture formats today: `Type | URL` per line; `Name | Note | URL | Date`
-per line. In the Python app these become structured child records, but the export shape must
-still be reproducible.
+`New record flag` (`*`) marks the first row of each record's block only. Via the API this
+becomes one record object with two table fields; the CSV shape must still be reproducible for
+the fallback path. Analyst capture formats today: `Type | URL` per line;
+`Name | Note | URL | Date` per line — these become structured child rows.
 
 ---
 
@@ -462,7 +508,7 @@ updates, invalid data, unexpected Kintone responses.
 
 | Phase | Content |
 |---|---|
-| 1 — Discovery | Document current rules from `Code.gs`, `PROCESS.md`, `KINTONE_FORMAT.md`, `ENGINEERING_HANDOFF.md`, `CODE_AUDIT.md` and the test suite. Confirm the Kintone app IDs, field codes and permissions. |
+| 1 — Discovery | Document current rules from `Code.gs`, `PROCESS.md`, `KINTONE_FORMAT.md`, `ENGINEERING_HANDOFF.md`, `CODE_AUDIT.md` and the test suite. Confirm the four Kintone prerequisites in §4 (app IDs and field codes, auth method, IP allowlisting, write permissions) before committing to the API path. |
 | 2 — Python core | Identification, classification, validation, routing engines + data model. Port the test suite first. |
 | 3 — Kintone integration | Read sync with change detection; then write-back. |
 | 4 — Analyst UI | Queue + one-click classification. |
